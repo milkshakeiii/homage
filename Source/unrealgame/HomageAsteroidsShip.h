@@ -3,14 +3,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/DefaultPawn.h"
+#include "PaperCharacter.h"
 #include "HomageAsteroidsShip.generated.h"
 
 /**
  * 
  */
 UCLASS()
-class UNREALGAME_API AHomageAsteroidsShip : public ADefaultPawn
+class UNREALGAME_API AHomageAsteroidsShip : public APaperCharacter
 {
 	GENERATED_BODY()
 	
