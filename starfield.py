@@ -24,7 +24,6 @@ class Starfield:
                 scale=size,
                 position=pos,
                 billboard=True,
-                unlit=True,
             )
             self.stars.append(star)
 
