@@ -176,32 +176,35 @@ function makeFrigate() {
 }
 
 function makeDestroyer() {
-  // ~400m, long aggressive profile with heavy broadside
+  // ~400m, fat & aggressive broadside brawler — wide beam
   const hull = [
-    [200, 0], [180, 12], [140, 20], [80, 25], [0, 28], [-80, 28], [-140, 24], [-180, 18], [-200, 10],
-    [-200, -10], [-180, -18], [-140, -24], [-80, -28], [0, -28], [80, -25], [140, -20], [180, -12]
+    [200, 0], [180, 25], [120, 50], [40, 65], [-40, 70], [-120, 68], [-180, 55], [-200, 35],
+    [-200, -35], [-180, -55], [-120, -68], [-40, -70], [40, -65], [120, -50], [180, -25]
   ];
-  // armored prow
-  const prow = [[200, 0], [185, 8], [160, 10], [140, 6], [140, -6], [160, -10], [185, -8]];
-  // command tower (raised)
-  const tower = [[40, 12], [20, 20], [-20, 22], [-40, 18], [-40, -18], [-20, -22], [20, -20], [40, -12]];
+  // armored prow (blunt wedge)
+  const prow = [[200, 0], [190, 18], [160, 30], [120, 30], [120, -30], [160, -30], [190, -18]];
+  // command tower (wide)
+  const tower = [[60, 25], [30, 45], [-30, 48], [-60, 40], [-60, -40], [-30, -48], [30, -45], [60, -25]];
   // broadside gun arrays (6 per side)
   const gunsL = [], gunsR = [];
   for (let i = 0; i < 6; i++) {
     const x = 120 - i * 50;
-    gunsL.push({ verts: [[x, 22 + i*0.5], [x+8, 28 + i*0.5], [x+4, 35 + i*0.5], [x-4, 35 + i*0.5], [x-8, 28 + i*0.5]],
+    gunsL.push({ verts: [[x, 55 + i*2], [x+10, 65 + i*2], [x+5, 78 + i*2], [x-5, 78 + i*2], [x-10, 65 + i*2]],
       stroke: '#ff8', fill: 'rgba(255,255,136,0.15)', width: 1 });
-    gunsR.push({ verts: [[x, -22 - i*0.5], [x+8, -28 - i*0.5], [x+4, -35 - i*0.5], [x-4, -35 - i*0.5], [x-8, -28 - i*0.5]],
+    gunsR.push({ verts: [[x, -55 - i*2], [x+10, -65 - i*2], [x+5, -78 - i*2], [x-5, -78 - i*2], [x-10, -65 - i*2]],
       stroke: '#ff8', fill: 'rgba(255,255,136,0.15)', width: 1 });
   }
-  // engine array
+  // engine array (wider spread)
   const engines = [];
-  for (let i = -2; i <= 2; i++) {
-    engines.push({ verts: [[-200, i*6+3], [-215, i*6+2], [-215, i*6-2], [-200, i*6-3]],
+  for (let i = -3; i <= 3; i++) {
+    engines.push({ verts: [[-200, i*9+4], [-218, i*9+3], [-218, i*9-3], [-200, i*9-4]],
       stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 });
   }
-  // spine detail
-  const spine = [[100, 3], [50, 5], [-50, 5], [-100, 3], [-100, -3], [-50, -5], [50, -5], [100, -3]];
+  // spine detail (wider)
+  const spine = [[100, 8], [50, 12], [-50, 12], [-100, 8], [-100, -8], [-50, -12], [50, -12], [100, -8]];
+  // armor belt (side plating)
+  const beltL = [[80, 50], [20, 62], [-60, 65], [-120, 60], [-100, 50], [-20, 48], [60, 42]];
+  const beltR = [[80, -50], [20, -62], [-60, -65], [-120, -60], [-100, -50], [-20, -48], [60, -42]];
 
   return {
     parts: [
@@ -209,6 +212,8 @@ function makeDestroyer() {
       { verts: prow, stroke: '#ff0', fill: 'rgba(255,255,0,0.1)', width: 1.5 },
       { verts: tower, stroke: '#ff0', fill: 'rgba(255,255,0,0.1)', width: 1.5 },
       { verts: spine, stroke: '#880', fill: 'rgba(136,136,0,0.08)', width: 1 },
+      { verts: beltL, stroke: '#aa0', fill: 'rgba(170,170,0,0.06)', width: 1 },
+      { verts: beltR, stroke: '#aa0', fill: 'rgba(170,170,0,0.06)', width: 1 },
       ...gunsL, ...gunsR, ...engines,
     ],
     length: 400, name: 'DESTROYER', size: '400m',
@@ -218,44 +223,59 @@ function makeDestroyer() {
 }
 
 function makeCruiser() {
-  // ~800m, imposing multi-section capital ship
-  const hull = [
-    [400, 0], [370, 20], [300, 35], [200, 45], [50, 50], [-100, 50], [-250, 45], [-350, 35], [-400, 20],
-    [-400, -20], [-350, -35], [-250, -45], [-100, -50], [50, -50], [200, -45], [300, -35], [370, -20]
+  // ~800m, H-shaped cruiser: two parallel hulls connected by a central bridge
+  // Upper hull (top arm of H)
+  const hullTop = [
+    [400, -60], [380, -40], [300, -30], [100, -25], [-100, -25], [-300, -30], [-380, -40], [-400, -60],
+    [-400, -100], [-380, -110], [-300, -120], [-100, -125], [100, -125], [300, -120], [380, -110], [400, -100]
   ];
-  // forward section
-  const fwd = [[400, 0], [380, 15], [320, 20], [280, 15], [280, -15], [320, -20], [380, -15]];
-  // mid section (raised superstructure)
-  const mid = [[100, 25], [50, 40], [-50, 42], [-100, 38], [-100, -38], [-50, -42], [50, -40], [100, -25]];
-  // aft section
-  const aft = [[-250, 30], [-280, 38], [-350, 38], [-380, 28], [-380, -28], [-350, -38], [-280, -38], [-250, -30]];
-  // main cannon (dorsal)
-  const cannon = [[250, 15], [200, 25], [150, 28], [100, 25], [100, -25], [150, -28], [200, -25], [250, -15]];
-  // flight decks
-  const deckL = [[-150, 35], [-120, 48], [-200, 50], [-220, 40]];
-  const deckR = [[-150, -35], [-120, -48], [-200, -50], [-220, -40]];
-  // engine pods (4 big)
+  // Lower hull (bottom arm of H)
+  const hullBot = [
+    [400, 60], [380, 40], [300, 30], [100, 25], [-100, 25], [-300, 30], [-380, 40], [-400, 60],
+    [-400, 100], [-380, 110], [-300, 120], [-100, 125], [100, 125], [300, 120], [380, 110], [400, 100]
+  ];
+  // Central crossbar connecting the two hulls
+  const crossbar = [
+    [120, -25], [120, 25], [-120, 25], [-120, -25]
+  ];
+  // Crossbar detail (bridge/command)
+  const bridge = [[80, -18], [80, 18], [-80, 18], [-80, -18]];
+  // Forward prongs
+  const prowTop = [[400, -80], [430, -70], [430, -90], [400, -100]];
+  const prowBot = [[400, 80], [430, 70], [430, 90], [400, 100]];
+  // Main cannon (mounted on crossbar, fires forward)
+  const cannon = [[120, -12], [200, -8], [200, 8], [120, 12]];
+  // Turrets on upper hull
+  const turretT1 = [[250, -100], [240, -130], [220, -130], [210, -100]];
+  const turretT2 = [[-100, -100], [-110, -130], [-130, -130], [-140, -100]];
+  // Turrets on lower hull
+  const turretB1 = [[250, 100], [240, 130], [220, 130], [210, 100]];
+  const turretB2 = [[-100, 100], [-110, 130], [-130, 130], [-140, 100]];
+  // Engines (4 per hull, 8 total)
   const engines = [];
-  const ey = [-30, -12, 12, 30];
-  for (const y of ey) {
-    engines.push({ verts: [[-400, y+8], [-430, y+5], [-430, y-5], [-400, y-8]],
+  for (const baseY of [-70, -90, 70, 90]) {
+    engines.push({ verts: [[-400, baseY+6], [-430, baseY+4], [-430, baseY-4], [-400, baseY-6]],
       stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1.5 });
   }
-  // sensor arrays
-  const sensor1 = [[350, 12], [340, 18], [330, 18], [320, 12]];
-  const sensor2 = [[350, -12], [340, -18], [330, -18], [320, -12]];
+  // Sensor arrays on crossbar
+  const sensorL = [[0, -22], [-10, -30], [10, -30]];
+  const sensorR = [[0, 22], [-10, 30], [10, 30]];
 
   return {
     parts: [
-      { verts: hull, stroke: '#f80', fill: 'rgba(255,136,0,0.04)', width: 2.5 },
-      { verts: fwd, stroke: '#f80', fill: 'rgba(255,136,0,0.08)', width: 1.5 },
-      { verts: mid, stroke: '#fa0', fill: 'rgba(255,170,0,0.08)', width: 1.5 },
-      { verts: aft, stroke: '#a60', fill: 'rgba(170,100,0,0.08)', width: 1.5 },
-      { verts: cannon, stroke: '#f44', fill: 'rgba(255,68,68,0.1)', width: 1.5 },
-      { verts: deckL, stroke: '#860', fill: 'rgba(136,100,0,0.15)', width: 1 },
-      { verts: deckR, stroke: '#860', fill: 'rgba(136,100,0,0.15)', width: 1 },
-      { verts: sensor1, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
-      { verts: sensor2, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
+      { verts: hullTop, stroke: '#f80', fill: 'rgba(255,136,0,0.04)', width: 2.5 },
+      { verts: hullBot, stroke: '#f80', fill: 'rgba(255,136,0,0.04)', width: 2.5 },
+      { verts: crossbar, stroke: '#fa0', fill: 'rgba(255,170,0,0.06)', width: 2 },
+      { verts: bridge, stroke: '#fa0', fill: 'rgba(255,170,0,0.12)', width: 1.5 },
+      { verts: prowTop, stroke: '#f80', fill: 'rgba(255,136,0,0.1)', width: 1.5 },
+      { verts: prowBot, stroke: '#f80', fill: 'rgba(255,136,0,0.1)', width: 1.5 },
+      { verts: cannon, stroke: '#f44', fill: 'rgba(255,68,68,0.15)', width: 1.5 },
+      { verts: turretT1, stroke: '#f88', fill: 'rgba(255,136,136,0.15)', width: 1 },
+      { verts: turretT2, stroke: '#f88', fill: 'rgba(255,136,136,0.15)', width: 1 },
+      { verts: turretB1, stroke: '#f88', fill: 'rgba(255,136,136,0.15)', width: 1 },
+      { verts: turretB2, stroke: '#f88', fill: 'rgba(255,136,136,0.15)', width: 1 },
+      { verts: sensorL, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
+      { verts: sensorR, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
       ...engines,
     ],
     length: 800, name: 'CRUISER', size: '800m',
@@ -265,56 +285,80 @@ function makeCruiser() {
 }
 
 function makeMothership() {
-  // ~2000m, massive carrier
-  const hull = [
-    [1000, 0], [950, 40], [800, 80], [500, 110], [100, 130], [-200, 135], [-500, 130],
-    [-750, 110], [-900, 80], [-1000, 40],
-    [-1000, -40], [-900, -80], [-750, -110], [-500, -130], [-200, -135], [100, -130],
-    [500, -110], [800, -80], [950, -40]
-  ];
-  // forward prong (upper)
-  const prongU = [[1000, 0], [980, 30], [850, 40], [700, 35], [700, 10], [850, 5], [980, -5]];
-  // forward prong (lower)
-  const prongD = [[1000, 0], [980, -30], [850, -40], [700, -35], [700, -10], [850, -5], [980, 5]];
-  // central spine
-  const spine = [[600, 20], [200, 35], [-200, 35], [-600, 25], [-600, -25], [-200, -35], [200, -35], [600, -20]];
-  // launch bays (3 per side)
-  const bays = [];
-  for (let i = 0; i < 3; i++) {
-    const x = 300 - i * 300;
-    bays.push({ verts: [[x+60, 90+i*10], [x+30, 120+i*5], [x-30, 125+i*5], [x-60, 95+i*10], [x-40, 85+i*10], [x+40, 82+i*10]],
-      stroke: '#48f', fill: 'rgba(68,136,255,0.12)', width: 1.5 });
-    bays.push({ verts: [[x+60, -90-i*10], [x+30, -120-i*5], [x-30, -125-i*5], [x-60, -95-i*10], [x-40, -85-i*10], [x+40, -82-i*10]],
-      stroke: '#48f', fill: 'rgba(68,136,255,0.12)', width: 1.5 });
+  // ~2000m, hexagonal carrier
+  const R = 900; // hex outer radius
+  const r = R * Math.cos(Math.PI / 6); // hex inner radius (~780)
+  // Main hexagonal hull
+  const hull = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6; // flat-top hex
+    hull.push([Math.cos(a) * R, Math.sin(a) * R]);
   }
-  // bridge complex
-  const bridge = [[0, 50], [-40, 80], [-100, 85], [-140, 70], [-140, -70], [-100, -85], [-40, -80], [0, -50]];
-  // engine cluster (8 engines)
+  // Inner hex (command ring)
+  const inner = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+    inner.push([Math.cos(a) * R * 0.5, Math.sin(a) * R * 0.5]);
+  }
+  // Central bridge
+  const bridge = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+    bridge.push([Math.cos(a) * R * 0.2, Math.sin(a) * R * 0.2]);
+  }
+  // Spokes connecting inner to outer hex
+  const spokes = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2 - Math.PI / 6;
+    const cos = Math.cos(a), sin = Math.sin(a);
+    const w = 25;
+    const pa = a + Math.PI / 2;
+    const dx = Math.cos(pa) * w, dy = Math.sin(pa) * w;
+    spokes.push({ verts: [
+      [cos * R * 0.52 + dx, sin * R * 0.52 + dy],
+      [cos * R * 0.95 + dx, sin * R * 0.95 + dy],
+      [cos * R * 0.95 - dx, sin * R * 0.95 - dy],
+      [cos * R * 0.52 - dx, sin * R * 0.52 - dy],
+    ], stroke: '#66c', fill: 'rgba(100,100,200,0.06)', width: 1.5 });
+  }
+  // Launch bays (on each face of the hex, between spokes)
+  const bays = [];
+  for (let i = 0; i < 6; i++) {
+    const a1 = (i / 6) * Math.PI * 2 - Math.PI / 6;
+    const a2 = ((i + 1) / 6) * Math.PI * 2 - Math.PI / 6;
+    const mid = (a1 + a2) / 2;
+    const bx = Math.cos(mid) * R * 0.72;
+    const by = Math.sin(mid) * R * 0.72;
+    const pa = mid + Math.PI / 2;
+    const bw = 60, bh = 30;
+    bays.push({ verts: [
+      [bx + Math.cos(mid)*bh + Math.cos(pa)*bw, by + Math.sin(mid)*bh + Math.sin(pa)*bw],
+      [bx - Math.cos(mid)*bh + Math.cos(pa)*bw, by - Math.sin(mid)*bh + Math.sin(pa)*bw],
+      [bx - Math.cos(mid)*bh - Math.cos(pa)*bw, by - Math.sin(mid)*bh - Math.sin(pa)*bw],
+      [bx + Math.cos(mid)*bh - Math.cos(pa)*bw, by + Math.sin(mid)*bh - Math.sin(pa)*bw],
+    ], stroke: '#48f', fill: 'rgba(68,136,255,0.12)', width: 1.5 });
+  }
+  // Engine cluster (along the rear face — the leftmost hex edge)
   const engines = [];
+  const engA = Math.PI; // pointing left
   for (let i = -3; i <= 3; i++) {
-    const y = i * 18;
-    engines.push({ verts: [[-1000, y+10], [-1050, y+7], [-1050, y-7], [-1000, y-10]],
+    const ey = i * 30;
+    engines.push({ verts: [[-R - 10, ey+12], [-R - 55, ey+8], [-R - 55, ey-8], [-R - 10, ey-12]],
       stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 2 });
   }
-  // armor plating detail
-  const plate1 = [[500, 60], [300, 90], [100, 95], [-100, 90], [-100, 70], [100, 65], [300, 60], [500, 45]];
-  const plate2 = [[500, -60], [300, -90], [100, -95], [-100, -90], [-100, -70], [100, -65], [300, -60], [500, -45]];
-  // antennae
-  const ant1 = [[900, 30], [880, 55], [860, 55], [870, 30]];
-  const ant2 = [[900, -30], [880, -55], [860, -55], [870, -30]];
+  // Antennae on top and bottom vertices
+  const ant1 = [[0, -R-10], [-20, -R-60], [20, -R-60]];
+  const ant2 = [[0, R+10], [-20, R+60], [20, R+60]];
 
   return {
     parts: [
       { verts: hull, stroke: '#88f', fill: 'rgba(136,136,255,0.03)', width: 3 },
-      { verts: prongU, stroke: '#88f', fill: 'rgba(136,136,255,0.06)', width: 2 },
-      { verts: prongD, stroke: '#88f', fill: 'rgba(136,136,255,0.06)', width: 2 },
-      { verts: spine, stroke: '#66c', fill: 'rgba(100,100,200,0.06)', width: 1.5 },
+      { verts: inner, stroke: '#88f', fill: 'rgba(136,136,255,0.05)', width: 2 },
       { verts: bridge, stroke: '#aaf', fill: 'rgba(170,170,255,0.1)', width: 2 },
-      { verts: plate1, stroke: '#448', fill: 'rgba(68,68,128,0.06)', width: 1 },
-      { verts: plate2, stroke: '#448', fill: 'rgba(68,68,128,0.06)', width: 1 },
+      ...spokes, ...bays,
       { verts: ant1, stroke: '#ff0', fill: 'rgba(255,255,0,0.15)', width: 1 },
       { verts: ant2, stroke: '#ff0', fill: 'rgba(255,255,0,0.15)', width: 1 },
-      ...bays, ...engines,
+      ...engines,
     ],
     length: 2000, name: 'MOTHERSHIP', size: '2000m',
     color: '#88f', abilityName: 'DEPLOY FIGHTERS',
@@ -611,17 +655,20 @@ function updateAndDrawAbility(ship, time, dt) {
       break;
     }
     case 'broadside': {
-      // Sequential gun flashes along the sides
-      const fireRate = 6;
-      if (ab.timer % fireRate === 0 && ab.timer < 70) {
-        const gunIdx = Math.floor(ab.timer / fireRate);
-        // top and bottom guns fire
-        ab.flashes.push({ idx: gunIdx, timer: 15,
-          x: x + 120 - gunIdx * 50, yTop: y + 30, yBot: y - 30 });
+      // Sequential gun flashes along the sides — 6 guns matching geometry
+      const fireRate = 10;
+      const startDelay = 10; // brief pause before first shot
+      const elapsed = ab.timer - startDelay;
+      if (elapsed >= 0 && elapsed % fireRate === 0 && elapsed < fireRate * 6) {
+        const gunIdx = Math.floor(elapsed / fireRate);
+        // gun x positions match the geometry: 120, 70, 20, -30, -80, -130
+        const gunX = 120 - gunIdx * 50;
+        ab.flashes.push({ idx: gunIdx, timer: 20,
+          x: x + gunX, yTop: y + 65 + gunIdx * 2, yBot: y - 65 - gunIdx * 2 });
       }
       ab.flashes = ab.flashes.filter(f => {
         f.timer--;
-        const alpha = f.timer / 15;
+        const alpha = f.timer / 20;
         const flashLen = len * 0.15;
         // draw flash lines
         for (const fy of [f.yTop, f.yBot]) {
@@ -712,15 +759,17 @@ function updateAndDrawAbility(ship, time, dt) {
     case 'fighters': {
       // Launch small fighter sprites from bays
       if (ab.timer % 15 === 0 && ab.fighters.length < 18) {
-        const side = Math.random() > 0.5 ? 1 : -1;
-        const bayIdx = Math.floor(Math.random() * 3);
-        const bx = x + 300 - bayIdx * 300;
-        const by = y + side * (100 + bayIdx * 10);
+        const bayIdx = Math.floor(Math.random() * 6);
+        const a1 = (bayIdx / 6) * Math.PI * 2 - Math.PI / 6;
+        const a2 = ((bayIdx + 1) / 6) * Math.PI * 2 - Math.PI / 6;
+        const mid = (a1 + a2) / 2;
+        const bx = x + Math.cos(mid) * len * 0.36;
+        const by = y + Math.sin(mid) * len * 0.36;
         ab.fighters.push({
           x: bx, y: by,
-          vx: (Math.random() - 0.3) * len * 0.02,
-          vy: side * len * 0.015 + (Math.random() - 0.5) * len * 0.01,
-          angle: side > 0 ? Math.PI * 0.25 : -Math.PI * 0.25,
+          vx: Math.cos(mid) * len * 0.02 + (Math.random() - 0.5) * len * 0.005,
+          vy: Math.sin(mid) * len * 0.02 + (Math.random() - 0.5) * len * 0.005,
+          angle: mid,
           life: 120 + Math.random() * 60
         });
       }
