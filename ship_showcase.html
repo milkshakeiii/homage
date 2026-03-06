@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ship Showcase // Scale Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; cursor: crosshair; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 15px; left: 15px;
+    color: #0ff; font: 14px monospace;
+    pointer-events: none; z-index: 10;
+    text-shadow: 0 0 8px #0ff;
+  }
+  #help {
+    position: fixed; bottom: 15px; left: 15px;
+    color: #888; font: 12px monospace;
+    pointer-events: none; z-index: 10;
+  }
+  #shipinfo {
+    position: fixed; top: 15px; right: 15px;
+    color: #fff; font: 14px monospace;
+    pointer-events: none; z-index: 10;
+    text-align: right;
+    text-shadow: 0 0 6px #fff;
+  }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="shipinfo"></div>
+<div id="help">
+  SCROLL to zoom &bull; DRAG to pan &bull; CLICK ship to trigger ability &bull; 1-6 to focus ship class
+</div>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hudEl = document.getElementById('hud');
+const infoEl = document.getElementById('shipinfo');
+
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+resize();
+window.addEventListener('resize', resize);
+
+// ============================================================
+// CAMERA
+// ============================================================
+const camera = {
+  x: 0, y: 0,        // world position (center of view)
+  zoom: 0.15,         // pixels per meter
+  targetZoom: 0.15,
+  targetX: 0, targetY: 0,
+  smoothing: 0.08
+};
+
+function worldToScreen(wx, wy) {
+  return [
+    (wx - camera.x) * camera.zoom + W / 2,
+    (wy - camera.y) * camera.zoom + H / 2
+  ];
+}
+
+function screenToWorld(sx, sy) {
+  return [
+    (sx - W / 2) / camera.zoom + camera.x,
+    (sy - H / 2) / camera.zoom + camera.y
+  ];
+}
+
+// ============================================================
+// SHIP DEFINITIONS — vertex geometry
+// ============================================================
+// All coordinates in meters, centered at (0,0)
+
+function makeSkiff() {
+  // ~10m, fast interceptor wedge
+  const hull = [
+    [5, 0], [3, 1.2], [1, 1.8], [-3, 2.5], [-5, 2], [-4.5, 0.8],
+    [-5, 0], // center notch
+    [-4.5, -0.8], [-5, -2], [-3, -2.5], [1, -1.8], [3, -1.2]
+  ];
+  // cockpit canopy
+  const cockpit = [
+    [4, 0], [2.5, 0.8], [1, 0.6], [1, -0.6], [2.5, -0.8]
+  ];
+  // engine nozzles
+  const engineL = [[-5, 1.2], [-6.5, 1.5], [-6.5, 0.5], [-5, 0.8]];
+  const engineR = [[-5, -0.8], [-6.5, -0.5], [-6.5, -1.5], [-5, -1.2]];
+  // wing fins
+  const finL = [[0, 1.8], [-1, 3.5], [-3, 3.2], [-2, 2.2]];
+  const finR = [[0, -1.8], [-1, -3.5], [-3, -3.2], [-2, -2.2]];
+  return {
+    parts: [
+      { verts: hull, stroke: '#0ff', fill: 'rgba(0,255,255,0.08)', width: 1.5 },
+      { verts: cockpit, stroke: '#0ff', fill: 'rgba(0,255,255,0.25)', width: 1 },
+      { verts: engineL, stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 },
+      { verts: engineR, stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 },
+      { verts: finL, stroke: '#088', fill: 'rgba(0,136,136,0.15)', width: 1 },
+      { verts: finR, stroke: '#088', fill: 'rgba(0,136,136,0.15)', width: 1 },
+    ],
+    length: 10, name: 'SKIFF', size: '10m',
+    color: '#0ff', abilityName: 'AFTERBURNER',
+    abilityColor: '#f80'
+  };
+}
+
+function makeCorvette() {
+  // ~50m, angular gunship
+  const hull = [
+    [25, 0], [20, 4], [12, 6], [5, 7], [-10, 8], [-20, 6], [-25, 3],
+    [-25, -3], [-20, -6], [-10, -8], [5, -7], [12, -6], [20, -4]
+  ];
+  // bridge tower
+  const bridge = [[10, 3], [5, 5], [-2, 5], [-5, 3], [-5, -3], [-2, -5], [5, -5], [10, -3]];
+  // forward guns
+  const gunL = [[22, 3], [28, 2.5], [28, 4], [22, 4.5]];
+  const gunR = [[22, -4.5], [28, -4], [28, -2.5], [22, -3]];
+  // engine block
+  const engine = [[-25, 5], [-32, 4], [-32, -4], [-25, -5]];
+  // side armor plates
+  const armorL = [[8, 6], [0, 8], [-8, 8.5], [-12, 7], [-5, 6]];
+  const armorR = [[8, -6], [0, -8], [-8, -8.5], [-12, -7], [-5, -6]];
+  return {
+    parts: [
+      { verts: hull, stroke: '#f0f', fill: 'rgba(255,0,255,0.06)', width: 1.5 },
+      { verts: bridge, stroke: '#f0f', fill: 'rgba(255,0,255,0.15)', width: 1 },
+      { verts: gunL, stroke: '#f88', fill: 'rgba(255,136,136,0.3)', width: 1 },
+      { verts: gunR, stroke: '#f88', fill: 'rgba(255,136,136,0.3)', width: 1 },
+      { verts: engine, stroke: '#f80', fill: 'rgba(255,136,0,0.2)', width: 1.5 },
+      { verts: armorL, stroke: '#808', fill: 'rgba(128,0,128,0.12)', width: 1 },
+      { verts: armorR, stroke: '#808', fill: 'rgba(128,0,128,0.12)', width: 1 },
+    ],
+    length: 50, name: 'CORVETTE', size: '50m',
+    color: '#f0f', abilityName: 'MISSILE SALVO',
+    abilityColor: '#f44'
+  };
+}
+
+function makeFrigate() {
+  // ~150m, balanced warship
+  const hull = [
+    [75, 0], [65, 8], [50, 12], [20, 15], [-20, 16], [-50, 14], [-70, 10], [-75, 5],
+    [-75, -5], [-70, -10], [-50, -14], [-20, -16], [20, -15], [50, -12], [65, -8]
+  ];
+  // command deck
+  const command = [[30, 6], [15, 10], [-5, 10], [-15, 7], [-15, -7], [-5, -10], [15, -10], [30, -6]];
+  // turret platforms (top)
+  const turret1 = [[40, 8], [35, 12], [25, 12], [20, 8]];
+  const turret2 = [[-10, 10], [-15, 15], [-25, 15], [-30, 10]];
+  const turret3 = [[40, -8], [35, -12], [25, -12], [20, -8]];
+  const turret4 = [[-10, -10], [-15, -15], [-25, -15], [-30, -10]];
+  // engines
+  const eng1 = [[-75, 8], [-85, 6], [-85, 2], [-75, 3]];
+  const eng2 = [[-75, -3], [-85, -2], [-85, -6], [-75, -8]];
+  // hangar bay
+  const hangar = [[-40, 10], [-35, 14], [-50, 14], [-55, 10]];
+  return {
+    parts: [
+      { verts: hull, stroke: '#0f0', fill: 'rgba(0,255,0,0.05)', width: 2 },
+      { verts: command, stroke: '#0f0', fill: 'rgba(0,255,0,0.12)', width: 1.5 },
+      { verts: turret1, stroke: '#8f8', fill: 'rgba(136,255,136,0.2)', width: 1 },
+      { verts: turret2, stroke: '#8f8', fill: 'rgba(136,255,136,0.2)', width: 1 },
+      { verts: turret3, stroke: '#8f8', fill: 'rgba(136,255,136,0.2)', width: 1 },
+      { verts: turret4, stroke: '#8f8', fill: 'rgba(136,255,136,0.2)', width: 1 },
+      { verts: eng1, stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 },
+      { verts: eng2, stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 },
+      { verts: hangar, stroke: '#080', fill: 'rgba(0,128,0,0.2)', width: 1 },
+    ],
+    length: 150, name: 'FRIGATE', size: '150m',
+    color: '#0f0', abilityName: 'SHIELD BUBBLE',
+    abilityColor: '#0ff'
+  };
+}
+
+function makeDestroyer() {
+  // ~400m, long aggressive profile with heavy broadside
+  const hull = [
+    [200, 0], [180, 12], [140, 20], [80, 25], [0, 28], [-80, 28], [-140, 24], [-180, 18], [-200, 10],
+    [-200, -10], [-180, -18], [-140, -24], [-80, -28], [0, -28], [80, -25], [140, -20], [180, -12]
+  ];
+  // armored prow
+  const prow = [[200, 0], [185, 8], [160, 10], [140, 6], [140, -6], [160, -10], [185, -8]];
+  // command tower (raised)
+  const tower = [[40, 12], [20, 20], [-20, 22], [-40, 18], [-40, -18], [-20, -22], [20, -20], [40, -12]];
+  // broadside gun arrays (6 per side)
+  const gunsL = [], gunsR = [];
+  for (let i = 0; i < 6; i++) {
+    const x = 120 - i * 50;
+    gunsL.push({ verts: [[x, 22 + i*0.5], [x+8, 28 + i*0.5], [x+4, 35 + i*0.5], [x-4, 35 + i*0.5], [x-8, 28 + i*0.5]],
+      stroke: '#ff8', fill: 'rgba(255,255,136,0.15)', width: 1 });
+    gunsR.push({ verts: [[x, -22 - i*0.5], [x+8, -28 - i*0.5], [x+4, -35 - i*0.5], [x-4, -35 - i*0.5], [x-8, -28 - i*0.5]],
+      stroke: '#ff8', fill: 'rgba(255,255,136,0.15)', width: 1 });
+  }
+  // engine array
+  const engines = [];
+  for (let i = -2; i <= 2; i++) {
+    engines.push({ verts: [[-200, i*6+3], [-215, i*6+2], [-215, i*6-2], [-200, i*6-3]],
+      stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1 });
+  }
+  // spine detail
+  const spine = [[100, 3], [50, 5], [-50, 5], [-100, 3], [-100, -3], [-50, -5], [50, -5], [100, -3]];
+
+  return {
+    parts: [
+      { verts: hull, stroke: '#ff0', fill: 'rgba(255,255,0,0.04)', width: 2 },
+      { verts: prow, stroke: '#ff0', fill: 'rgba(255,255,0,0.1)', width: 1.5 },
+      { verts: tower, stroke: '#ff0', fill: 'rgba(255,255,0,0.1)', width: 1.5 },
+      { verts: spine, stroke: '#880', fill: 'rgba(136,136,0,0.08)', width: 1 },
+      ...gunsL, ...gunsR, ...engines,
+    ],
+    length: 400, name: 'DESTROYER', size: '400m',
+    color: '#ff0', abilityName: 'BROADSIDE',
+    abilityColor: '#ff0'
+  };
+}
+
+function makeCruiser() {
+  // ~800m, imposing multi-section capital ship
+  const hull = [
+    [400, 0], [370, 20], [300, 35], [200, 45], [50, 50], [-100, 50], [-250, 45], [-350, 35], [-400, 20],
+    [-400, -20], [-350, -35], [-250, -45], [-100, -50], [50, -50], [200, -45], [300, -35], [370, -20]
+  ];
+  // forward section
+  const fwd = [[400, 0], [380, 15], [320, 20], [280, 15], [280, -15], [320, -20], [380, -15]];
+  // mid section (raised superstructure)
+  const mid = [[100, 25], [50, 40], [-50, 42], [-100, 38], [-100, -38], [-50, -42], [50, -40], [100, -25]];
+  // aft section
+  const aft = [[-250, 30], [-280, 38], [-350, 38], [-380, 28], [-380, -28], [-350, -38], [-280, -38], [-250, -30]];
+  // main cannon (dorsal)
+  const cannon = [[250, 15], [200, 25], [150, 28], [100, 25], [100, -25], [150, -28], [200, -25], [250, -15]];
+  // flight decks
+  const deckL = [[-150, 35], [-120, 48], [-200, 50], [-220, 40]];
+  const deckR = [[-150, -35], [-120, -48], [-200, -50], [-220, -40]];
+  // engine pods (4 big)
+  const engines = [];
+  const ey = [-30, -12, 12, 30];
+  for (const y of ey) {
+    engines.push({ verts: [[-400, y+8], [-430, y+5], [-430, y-5], [-400, y-8]],
+      stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 1.5 });
+  }
+  // sensor arrays
+  const sensor1 = [[350, 12], [340, 18], [330, 18], [320, 12]];
+  const sensor2 = [[350, -12], [340, -18], [330, -18], [320, -12]];
+
+  return {
+    parts: [
+      { verts: hull, stroke: '#f80', fill: 'rgba(255,136,0,0.04)', width: 2.5 },
+      { verts: fwd, stroke: '#f80', fill: 'rgba(255,136,0,0.08)', width: 1.5 },
+      { verts: mid, stroke: '#fa0', fill: 'rgba(255,170,0,0.08)', width: 1.5 },
+      { verts: aft, stroke: '#a60', fill: 'rgba(170,100,0,0.08)', width: 1.5 },
+      { verts: cannon, stroke: '#f44', fill: 'rgba(255,68,68,0.1)', width: 1.5 },
+      { verts: deckL, stroke: '#860', fill: 'rgba(136,100,0,0.15)', width: 1 },
+      { verts: deckR, stroke: '#860', fill: 'rgba(136,100,0,0.15)', width: 1 },
+      { verts: sensor1, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
+      { verts: sensor2, stroke: '#ff0', fill: 'rgba(255,255,0,0.2)', width: 1 },
+      ...engines,
+    ],
+    length: 800, name: 'CRUISER', size: '800m',
+    color: '#f80', abilityName: 'ENERGY LANCE',
+    abilityColor: '#f44'
+  };
+}
+
+function makeMothership() {
+  // ~2000m, massive carrier
+  const hull = [
+    [1000, 0], [950, 40], [800, 80], [500, 110], [100, 130], [-200, 135], [-500, 130],
+    [-750, 110], [-900, 80], [-1000, 40],
+    [-1000, -40], [-900, -80], [-750, -110], [-500, -130], [-200, -135], [100, -130],
+    [500, -110], [800, -80], [950, -40]
+  ];
+  // forward prong (upper)
+  const prongU = [[1000, 0], [980, 30], [850, 40], [700, 35], [700, 10], [850, 5], [980, -5]];
+  // forward prong (lower)
+  const prongD = [[1000, 0], [980, -30], [850, -40], [700, -35], [700, -10], [850, -5], [980, 5]];
+  // central spine
+  const spine = [[600, 20], [200, 35], [-200, 35], [-600, 25], [-600, -25], [-200, -35], [200, -35], [600, -20]];
+  // launch bays (3 per side)
+  const bays = [];
+  for (let i = 0; i < 3; i++) {
+    const x = 300 - i * 300;
+    bays.push({ verts: [[x+60, 90+i*10], [x+30, 120+i*5], [x-30, 125+i*5], [x-60, 95+i*10], [x-40, 85+i*10], [x+40, 82+i*10]],
+      stroke: '#48f', fill: 'rgba(68,136,255,0.12)', width: 1.5 });
+    bays.push({ verts: [[x+60, -90-i*10], [x+30, -120-i*5], [x-30, -125-i*5], [x-60, -95-i*10], [x-40, -85-i*10], [x+40, -82-i*10]],
+      stroke: '#48f', fill: 'rgba(68,136,255,0.12)', width: 1.5 });
+  }
+  // bridge complex
+  const bridge = [[0, 50], [-40, 80], [-100, 85], [-140, 70], [-140, -70], [-100, -85], [-40, -80], [0, -50]];
+  // engine cluster (8 engines)
+  const engines = [];
+  for (let i = -3; i <= 3; i++) {
+    const y = i * 18;
+    engines.push({ verts: [[-1000, y+10], [-1050, y+7], [-1050, y-7], [-1000, y-10]],
+      stroke: '#f80', fill: 'rgba(255,136,0,0.3)', width: 2 });
+  }
+  // armor plating detail
+  const plate1 = [[500, 60], [300, 90], [100, 95], [-100, 90], [-100, 70], [100, 65], [300, 60], [500, 45]];
+  const plate2 = [[500, -60], [300, -90], [100, -95], [-100, -90], [-100, -70], [100, -65], [300, -60], [500, -45]];
+  // antennae
+  const ant1 = [[900, 30], [880, 55], [860, 55], [870, 30]];
+  const ant2 = [[900, -30], [880, -55], [860, -55], [870, -30]];
+
+  return {
+    parts: [
+      { verts: hull, stroke: '#88f', fill: 'rgba(136,136,255,0.03)', width: 3 },
+      { verts: prongU, stroke: '#88f', fill: 'rgba(136,136,255,0.06)', width: 2 },
+      { verts: prongD, stroke: '#88f', fill: 'rgba(136,136,255,0.06)', width: 2 },
+      { verts: spine, stroke: '#66c', fill: 'rgba(100,100,200,0.06)', width: 1.5 },
+      { verts: bridge, stroke: '#aaf', fill: 'rgba(170,170,255,0.1)', width: 2 },
+      { verts: plate1, stroke: '#448', fill: 'rgba(68,68,128,0.06)', width: 1 },
+      { verts: plate2, stroke: '#448', fill: 'rgba(68,68,128,0.06)', width: 1 },
+      { verts: ant1, stroke: '#ff0', fill: 'rgba(255,255,0,0.15)', width: 1 },
+      { verts: ant2, stroke: '#ff0', fill: 'rgba(255,255,0,0.15)', width: 1 },
+      ...bays, ...engines,
+    ],
+    length: 2000, name: 'MOTHERSHIP', size: '2000m',
+    color: '#88f', abilityName: 'DEPLOY FIGHTERS',
+    abilityColor: '#48f'
+  };
+}
+
+// ============================================================
+// SHIP INSTANCES
+// ============================================================
+const shipDefs = [makeSkiff(), makeCorvette(), makeFrigate(), makeDestroyer(), makeCruiser(), makeMothership()];
+
+// Place ships in world space with spacing
+const ships = [];
+let placeX = 0;
+for (let i = 0; i < shipDefs.length; i++) {
+  const def = shipDefs[i];
+  ships.push({
+    def,
+    x: placeX,
+    y: 0,
+    angle: 0,
+    ability: null, // active ability animation state
+    enginePhase: Math.random() * Math.PI * 2,
+  });
+  const nextLen = i < shipDefs.length - 1 ? shipDefs[i + 1].length : 0;
+  placeX += def.length * 1.5 + nextLen * 1.5 + 50;
+}
+
+// ============================================================
+// ABILITY ANIMATIONS
+// ============================================================
+// Each ability is a { type, timer, maxTimer, ... } object
+
+function triggerAbility(ship) {
+  const name = ship.def.abilityName;
+  switch (name) {
+    case 'AFTERBURNER':
+      ship.ability = { type: 'afterburner', timer: 0, maxTimer: 90 };
+      break;
+    case 'MISSILE SALVO':
+      ship.ability = { type: 'missiles', timer: 0, maxTimer: 120, missiles: [] };
+      break;
+    case 'SHIELD BUBBLE':
+      ship.ability = { type: 'shield', timer: 0, maxTimer: 150 };
+      break;
+    case 'BROADSIDE':
+      ship.ability = { type: 'broadside', timer: 0, maxTimer: 100, flashes: [] };
+      break;
+    case 'ENERGY LANCE':
+      ship.ability = { type: 'lance', timer: 0, maxTimer: 120 };
+      break;
+    case 'DEPLOY FIGHTERS':
+      ship.ability = { type: 'fighters', timer: 0, maxTimer: 180, fighters: [] };
+      break;
+  }
+}
+
+// ============================================================
+// PARTICLES
+// ============================================================
+let particles = [];
+function spawnP(x, y, vx, vy, color, life, size) {
+  particles.push({ x, y, vx, vy, color, life, maxLife: life, size });
+}
+
+// ============================================================
+// STARS
+// ============================================================
+const stars = Array.from({length: 500}, () => ({
+  x: (Math.random() - 0.5) * 20000,
+  y: (Math.random() - 0.5) * 5000,
+  size: Math.random() * 1.5 + 0.5,
+  brightness: Math.random() * 0.4 + 0.2
+}));
+
+// ============================================================
+// INPUT
+// ============================================================
+let dragging = false, dragStartX, dragStartY, camStartX, camStartY;
+let selectedShip = null;
+
+canvas.addEventListener('mousedown', e => {
+  dragging = true;
+  dragStartX = e.clientX; dragStartY = e.clientY;
+  camStartX = camera.targetX; camStartY = camera.targetY;
+});
+canvas.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  camera.targetX = camStartX - dx / camera.zoom;
+  camera.targetY = camStartY - dy / camera.zoom;
+});
+canvas.addEventListener('mouseup', e => {
+  const dist = Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY);
+  dragging = false;
+  if (dist < 5) {
+    // click — check for ship hit
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    for (const s of ships) {
+      const r = s.def.length * 0.6;
+      if (Math.hypot(wx - s.x, wy - s.y) < r) {
+        selectedShip = s;
+        triggerAbility(s);
+        break;
+      }
+    }
+  }
+});
+canvas.addEventListener('wheel', e => {
+  const factor = e.deltaY > 0 ? 0.85 : 1.18;
+  camera.targetZoom = Math.max(0.003, Math.min(20, camera.targetZoom * factor));
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener('keydown', e => {
+  const idx = parseInt(e.key) - 1;
+  if (idx >= 0 && idx < ships.length) {
+    const s = ships[idx];
+    camera.targetX = s.x;
+    camera.targetY = s.y;
+    // zoom to fit ship nicely
+    camera.targetZoom = Math.min(40, W / (s.def.length * 4));
+    selectedShip = s;
+    triggerAbility(s);
+  }
+});
+
+// ============================================================
+// DRAW HELPERS
+// ============================================================
+function drawPolyWorld(verts, ox, oy, angle, stroke, fill, lineWidth, glow) {
+  ctx.save();
+  const [sx, sy] = worldToScreen(ox, oy);
+  ctx.translate(sx, sy);
+  ctx.scale(camera.zoom, camera.zoom);
+  ctx.rotate(angle);
+  if (glow > 0) { ctx.shadowColor = stroke; ctx.shadowBlur = glow; }
+  ctx.beginPath();
+  ctx.moveTo(verts[0][0], verts[0][1]);
+  for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i][0], verts[i][1]);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lineWidth / camera.zoom; // keep consistent screen-space width
+  // but cap min/max for readability
+  ctx.lineWidth = Math.max(0.5, Math.min(lineWidth * 3, lineWidth / Math.min(1, camera.zoom)));
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawShip(ship, time) {
+  const { def, x, y, angle, enginePhase } = ship;
+  const glow = Math.max(5, 15 * Math.min(1, camera.zoom * def.length / 100));
+
+  for (const part of def.parts) {
+    drawPolyWorld(part.verts, x, y, angle, part.stroke, part.fill, part.width, glow);
+  }
+
+  // Animated engine glow
+  const pulse = 0.7 + 0.3 * Math.sin(time * 8 + enginePhase);
+  for (const part of def.parts) {
+    if (part.stroke === '#f80') {
+      // re-draw engine parts with pulsing brightness
+      const alpha = 0.3 + 0.4 * pulse;
+      drawPolyWorld(part.verts, x, y, angle, '#f80', `rgba(255,136,0,${alpha})`, part.width, glow * pulse * 1.5);
+    }
+  }
+
+  // Label (only when zoomed enough to read)
+  const screenSize = def.length * camera.zoom;
+  if (screenSize > 40) {
+    const [sx, sy] = worldToScreen(x, y - def.length * 0.5 - 20);
+    ctx.fillStyle = def.color;
+    ctx.shadowColor = def.color;
+    ctx.shadowBlur = 8;
+    ctx.font = `${Math.min(16, Math.max(10, screenSize / 8))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(def.name, sx, sy);
+    ctx.shadowBlur = 0;
+  }
+}
+
+// ============================================================
+// ABILITY RENDERING
+// ============================================================
+function updateAndDrawAbility(ship, time, dt) {
+  const ab = ship.ability;
+  if (!ab) return;
+  ab.timer++;
+  const t = ab.timer / ab.maxTimer; // 0..1 progress
+  const { x, y, def } = ship;
+  const len = def.length;
+
+  switch (ab.type) {
+    case 'afterburner': {
+      // Massive flame trail behind ship
+      const intensity = Math.sin(t * Math.PI); // ramp up then down
+      for (let i = 0; i < 3; i++) {
+        const spread = (Math.random() - 0.5) * len * 0.4;
+        const speed = len * 0.3 + Math.random() * len * 0.2;
+        spawnP(x - len * 0.5 + spread * 0.3, y + spread,
+          -speed * (0.5 + intensity), (Math.random() - 0.5) * len * 0.1,
+          Math.random() > 0.5 ? '#f80' : '#ff0',
+          20 + Math.random() * 20, len * 0.05 * intensity + 1);
+      }
+      break;
+    }
+    case 'missiles': {
+      // Launch missiles that spread outward
+      if (ab.timer % 8 === 0 && ab.timer < 60) {
+        const my = (Math.random() - 0.5) * len * 0.6;
+        ab.missiles.push({
+          x: x + len * 0.2, y: y + my,
+          vx: len * 0.08 + Math.random() * len * 0.05,
+          vy: my * 0.05,
+          trail: [], life: 80
+        });
+      }
+      ab.missiles = ab.missiles.filter(m => {
+        m.x += m.vx; m.y += m.vy;
+        m.vy += (Math.random() - 0.5) * 0.5;
+        m.trail.push({ x: m.x, y: m.y });
+        if (m.trail.length > 15) m.trail.shift();
+        m.life--;
+        // draw trail
+        if (m.trail.length > 1) {
+          ctx.beginPath();
+          const [s0x, s0y] = worldToScreen(m.trail[0].x, m.trail[0].y);
+          ctx.moveTo(s0x, s0y);
+          for (let i = 1; i < m.trail.length; i++) {
+            const [tsx, tsy] = worldToScreen(m.trail[i].x, m.trail[i].y);
+            ctx.lineTo(tsx, tsy);
+          }
+          ctx.strokeStyle = '#f44';
+          ctx.shadowColor = '#f44';
+          ctx.shadowBlur = 6;
+          ctx.lineWidth = Math.max(1, 2 * camera.zoom * len * 0.003);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        }
+        // draw missile head
+        const [mx, my2] = worldToScreen(m.x, m.y);
+        ctx.fillStyle = '#fff';
+        ctx.shadowColor = '#f44';
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        ctx.arc(mx, my2, Math.max(2, camera.zoom * len * 0.01), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        // explode at end of life
+        if (m.life <= 0) {
+          for (let i = 0; i < 8; i++) {
+            const a = Math.random() * Math.PI * 2;
+            spawnP(m.x, m.y, Math.cos(a) * len * 0.05, Math.sin(a) * len * 0.05,
+              '#f80', 20, len * 0.02);
+          }
+        }
+        return m.life > 0;
+      });
+      break;
+    }
+    case 'shield': {
+      // Expanding/pulsing hexagonal shield
+      const radius = len * 0.7;
+      const pulse = 0.9 + 0.1 * Math.sin(time * 10);
+      const alpha = Math.sin(t * Math.PI) * 0.6;
+      const [sx, sy] = worldToScreen(x, y);
+      const sr = radius * camera.zoom * pulse;
+      // hexagonal segments
+      ctx.save();
+      ctx.translate(sx, sy);
+      const segments = 6;
+      for (let i = 0; i < segments; i++) {
+        const a1 = (i / segments) * Math.PI * 2 + time * 0.5;
+        const a2 = ((i + 1) / segments) * Math.PI * 2 + time * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(a1) * sr, Math.sin(a1) * sr);
+        ctx.lineTo(Math.cos(a2) * sr, Math.sin(a2) * sr);
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(0,255,255,${alpha * (0.5 + 0.5 * Math.sin(time * 6 + i))})`;
+        ctx.shadowColor = '#0ff';
+        ctx.shadowBlur = 15;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = `rgba(0,255,255,${alpha * 0.05})`;
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+      ctx.restore();
+      break;
+    }
+    case 'broadside': {
+      // Sequential gun flashes along the sides
+      const fireRate = 6;
+      if (ab.timer % fireRate === 0 && ab.timer < 70) {
+        const gunIdx = Math.floor(ab.timer / fireRate);
+        // top and bottom guns fire
+        ab.flashes.push({ idx: gunIdx, timer: 15,
+          x: x + 120 - gunIdx * 50, yTop: y + 30, yBot: y - 30 });
+      }
+      ab.flashes = ab.flashes.filter(f => {
+        f.timer--;
+        const alpha = f.timer / 15;
+        const flashLen = len * 0.15;
+        // draw flash lines
+        for (const fy of [f.yTop, f.yBot]) {
+          const dir = fy > y ? 1 : -1;
+          const [fx, ffy] = worldToScreen(f.x, fy);
+          const endY = ffy + dir * flashLen * camera.zoom;
+          ctx.beginPath();
+          ctx.moveTo(fx, ffy);
+          ctx.lineTo(fx, endY);
+          ctx.strokeStyle = `rgba(255,255,100,${alpha})`;
+          ctx.shadowColor = '#ff0';
+          ctx.shadowBlur = 20 * alpha;
+          ctx.lineWidth = Math.max(2, 4 * camera.zoom);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          // muzzle flash
+          ctx.beginPath();
+          ctx.arc(fx, ffy, Math.max(3, 8 * camera.zoom) * alpha, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,255,200,${alpha})`;
+          ctx.fill();
+        }
+        // spawn particles
+        if (f.timer % 3 === 0) {
+          for (const fy of [f.yTop, f.yBot]) {
+            const dir = fy > y ? 1 : -1;
+            spawnP(f.x, fy, (Math.random()-0.5) * len*0.02, dir * len * 0.08,
+              '#ff0', 15, len * 0.01);
+          }
+        }
+        return f.timer > 0;
+      });
+      break;
+    }
+    case 'lance': {
+      // Charging energy beam that fires forward
+      const chargeT = 0.4; // fraction of time spent charging
+      const [sx, sy] = worldToScreen(x + len * 0.3, y);
+      if (t < chargeT) {
+        // charge-up: gathering energy particles toward the front
+        const ct = t / chargeT;
+        const radius = len * (1 - ct) * 0.8;
+        for (let i = 0; i < 2; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const r = radius * (0.5 + Math.random() * 0.5);
+          spawnP(x + len * 0.3 + Math.cos(a) * r, y + Math.sin(a) * r,
+            -Math.cos(a) * len * 0.05 * ct, -Math.sin(a) * len * 0.05 * ct,
+            '#f44', 10, len * 0.005 * (1 + ct * 2));
+        }
+        // glowing charge point
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(3, camera.zoom * len * 0.03 * ct * 2), 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,68,68,${ct})`;
+        ctx.shadowColor = '#f44';
+        ctx.shadowBlur = 30 * ct;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else {
+        // FIRE the beam
+        const ft = (t - chargeT) / (1 - chargeT);
+        const beamAlpha = ft < 0.1 ? ft / 0.1 : (1 - ft);
+        const beamLen = len * 5;
+        const [ex, ey] = worldToScreen(x + len * 0.3 + beamLen, y);
+        const beamWidth = Math.max(3, camera.zoom * len * 0.04 * (1 + Math.sin(time * 30) * 0.2));
+        // core beam
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+        ctx.strokeStyle = `rgba(255,100,100,${beamAlpha})`;
+        ctx.shadowColor = '#f44';
+        ctx.shadowBlur = 30;
+        ctx.lineWidth = beamWidth;
+        ctx.stroke();
+        // bright core
+        ctx.strokeStyle = `rgba(255,220,220,${beamAlpha * 0.8})`;
+        ctx.lineWidth = beamWidth * 0.4;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        // impact sparks
+        if (Math.random() > 0.5) {
+          spawnP(x + len * 0.3 + beamLen * (0.8 + Math.random() * 0.2),
+            y + (Math.random() - 0.5) * len * 0.2,
+            (Math.random()-0.5)*len*0.05, (Math.random()-0.5)*len*0.1,
+            '#f88', 10, len * 0.01);
+        }
+      }
+      break;
+    }
+    case 'fighters': {
+      // Launch small fighter sprites from bays
+      if (ab.timer % 15 === 0 && ab.fighters.length < 18) {
+        const side = Math.random() > 0.5 ? 1 : -1;
+        const bayIdx = Math.floor(Math.random() * 3);
+        const bx = x + 300 - bayIdx * 300;
+        const by = y + side * (100 + bayIdx * 10);
+        ab.fighters.push({
+          x: bx, y: by,
+          vx: (Math.random() - 0.3) * len * 0.02,
+          vy: side * len * 0.015 + (Math.random() - 0.5) * len * 0.01,
+          angle: side > 0 ? Math.PI * 0.25 : -Math.PI * 0.25,
+          life: 120 + Math.random() * 60
+        });
+      }
+      // mini skiff shape
+      const miniVerts = [[4, 0], [-2, -2], [-3, 0], [-2, 2]];
+      ab.fighters = ab.fighters.filter(f => {
+        f.x += f.vx;
+        f.y += f.vy;
+        f.vx *= 1.01;
+        f.angle = Math.atan2(f.vy, f.vx);
+        f.life--;
+        const alpha = Math.min(1, f.life / 30);
+        const scale = len * 0.012;
+        const [fx, fy] = worldToScreen(f.x, f.y);
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.scale(camera.zoom * scale, camera.zoom * scale);
+        ctx.rotate(f.angle);
+        ctx.beginPath();
+        ctx.moveTo(miniVerts[0][0], miniVerts[0][1]);
+        for (let i = 1; i < miniVerts.length; i++) ctx.lineTo(miniVerts[i][0], miniVerts[i][1]);
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(68,136,255,${alpha})`;
+        ctx.shadowColor = '#48f';
+        ctx.shadowBlur = 6;
+        ctx.lineWidth = 0.5 / (camera.zoom * scale || 1);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        // engine trail
+        if (f.life % 2 === 0) {
+          spawnP(f.x, f.y, -f.vx * 0.3, -f.vy * 0.3, '#48f', 15, len * 0.003);
+        }
+        return f.life > 0;
+      });
+      break;
+    }
+  }
+
+  if (ab.timer >= ab.maxTimer) ship.ability = null;
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+let lastTime = performance.now();
+let fps = 0, frameCount = 0, fpsTime = 0;
+
+function loop(now) {
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+  const time = now / 1000;
+
+  // Smooth camera
+  camera.x += (camera.targetX - camera.x) * camera.smoothing;
+  camera.y += (camera.targetY - camera.y) * camera.smoothing;
+  camera.zoom += (camera.targetZoom - camera.zoom) * camera.smoothing;
+
+  // Clear
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars (parallax)
+  for (const s of stars) {
+    const [sx, sy] = worldToScreen(s.x, s.y);
+    if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue;
+    ctx.fillStyle = `rgba(255,255,255,${s.brightness})`;
+    ctx.fillRect(sx, sy, s.size, s.size);
+  }
+
+  // Grid (subtle reference for scale)
+  const gridSize = camera.zoom > 0.5 ? 50 : camera.zoom > 0.05 ? 500 : 2000;
+  const gridAlpha = Math.min(0.15, camera.zoom * 0.3);
+  if (gridAlpha > 0.01) {
+    ctx.strokeStyle = `rgba(255,255,255,${gridAlpha})`;
+    ctx.lineWidth = 0.5;
+    const [tlx, tly] = screenToWorld(0, 0);
+    const [brx, bry] = screenToWorld(W, H);
+    const startX = Math.floor(tlx / gridSize) * gridSize;
+    const startY = Math.floor(tly / gridSize) * gridSize;
+    for (let gx = startX; gx < brx; gx += gridSize) {
+      const [sx] = worldToScreen(gx, 0);
+      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+    }
+    for (let gy = startY; gy < bry; gy += gridSize) {
+      const [, sy] = worldToScreen(0, gy);
+      ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+    }
+  }
+
+  // Draw ships
+  for (const s of ships) {
+    drawShip(s, time);
+    updateAndDrawAbility(s, time, dt);
+  }
+
+  // Particles
+  particles = particles.filter(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.96; p.vy *= 0.96;
+    p.life--;
+    const alpha = p.life / p.maxLife;
+    const [sx, sy] = worldToScreen(p.x, p.y);
+    if (sx < -50 || sx > W + 50 || sy < -50 || sy > H + 50) return p.life > 0;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(sx, sy, Math.max(1, p.size * camera.zoom), 0, Math.PI * 2);
+    ctx.fill();
+    return p.life > 0;
+  });
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+
+  // HUD
+  frameCount++;
+  fpsTime += dt;
+  if (fpsTime >= 0.5) { fps = Math.round(frameCount / fpsTime); frameCount = 0; fpsTime = 0; }
+
+  const zoomMeters = W / camera.zoom;
+  let scaleLabel;
+  if (zoomMeters < 100) scaleLabel = `~${Math.round(zoomMeters)}m across`;
+  else if (zoomMeters < 2000) scaleLabel = `~${(zoomMeters/1000).toFixed(1)}km across`;
+  else scaleLabel = `~${Math.round(zoomMeters/1000)}km across`;
+
+  hudEl.innerHTML = `FPS: ${fps}<br>ZOOM: ${camera.zoom.toFixed(3)} px/m<br>${scaleLabel}`;
+
+  if (selectedShip) {
+    infoEl.innerHTML = `${selectedShip.def.name}<br>${selectedShip.def.size}<br><span style="color:${selectedShip.def.abilityColor}">${selectedShip.def.abilityName}</span>`;
+  }
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
