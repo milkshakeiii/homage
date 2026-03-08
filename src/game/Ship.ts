@@ -1,5 +1,7 @@
 import { parseColor } from '../utils/Color';
 import { ShipPartBuffers, WebGLRenderer } from '../renderer/WebGLRenderer';
+import { ShipPhysicsConfig, getPhysicsConfig } from './ShipPhysics';
+import type { Command } from './Commands';
 
 export interface ShipPartDef {
   verts: number[][];
@@ -28,6 +30,8 @@ export interface Ship {
   maxHealth: number;
   ability: AbilityState | null;
   abilityName: string;
+  physicsConfig?: ShipPhysicsConfig;
+  command?: Command;
 }
 
 export type AbilityState =
@@ -67,6 +71,7 @@ export function createShip(def: ShipDef, renderer: WebGLRenderer, x: number, y: 
     def, buffers, x, y, vx: 0, vy: 0, angle: 0, angularVel: 0,
     health: 100, maxHealth: 100,
     ability: null, abilityName: ABILITIES[abilityIdx] ?? 'AFTERBURNER',
+    physicsConfig: getPhysicsConfig(def.name),
   };
 }
 

@@ -11,12 +11,19 @@ export class Input {
   private camStartX = 0;
   private camStartY = 0;
   clickWorld: [number, number] | null = null; // set on click, consumed by game
+  rightClickWorld: [number, number] | null = null;
+  shiftHeld = false;
 
   constructor(canvas: HTMLCanvasElement, camera: Camera) {
+    window.addEventListener('keydown', e => this.shiftHeld = e.shiftKey);
+    window.addEventListener('keyup', e => this.shiftHeld = e.shiftKey);
+
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
     window.addEventListener('keydown', e => this.keys.add(e.key.toLowerCase()));
     window.addEventListener('keyup', e => this.keys.delete(e.key.toLowerCase()));
 
     canvas.addEventListener('mousedown', e => {
+      if (e.button === 2) return; // right-click handled on mouseup
       this.mouseDown = true;
       this.dragging = true;
       this.dragStartX = e.clientX;
@@ -35,6 +42,10 @@ export class Input {
     });
 
     canvas.addEventListener('mouseup', e => {
+      if (e.button === 2) {
+        this.rightClickWorld = camera.screenToWorld(e.clientX, e.clientY, canvas.width, canvas.height);
+        return;
+      }
       if (this.dragging) {
         const dx = e.clientX - this.dragStartX;
         const dy = e.clientY - this.dragStartY;
@@ -59,6 +70,12 @@ export class Input {
   consumeClick(): [number, number] | null {
     const c = this.clickWorld;
     this.clickWorld = null;
+    return c;
+  }
+
+  consumeRightClick(): [number, number] | null {
+    const c = this.rightClickWorld;
+    this.rightClickWorld = null;
     return c;
   }
 }
