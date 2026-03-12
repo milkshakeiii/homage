@@ -9,7 +9,6 @@ import type { Vec2 } from '../utils/Math';
 export type Command =
   | { type: 'move'; target: Vec2 }
   | { type: 'collisionCourse'; targetShip: Ship }
-  | { type: 'evasive'; baseDir: number; jinkTimer: number; jinkAngle: number }
   | { type: 'orbit'; targetShip: Ship; radius: number; clockwise: boolean }
   | { type: 'keepAtRange'; targetShip: Ship; range: number };
 
@@ -41,21 +40,6 @@ export function resolveCommand(ship: Ship, command: Command): SteeringOutput {
         { x: command.targetShip.vx, y: command.targetShip.vy }
       );
 
-    case 'evasive': {
-      const baseTarget: Vec2 = {
-        x: ship.x + Math.cos(command.baseDir) * 500,
-        y: ship.y + Math.sin(command.baseDir) * 500,
-      };
-      const jinkTarget: Vec2 = {
-        x: ship.x + Math.cos(command.baseDir + command.jinkAngle) * 300,
-        y: ship.y + Math.sin(command.baseDir + command.jinkAngle) * 300,
-      };
-      return blendSteering([
-        { output: seek(agent, baseTarget), weight: 0.4 },
-        { output: seek(agent, jinkTarget), weight: 0.6 },
-      ]);
-    }
-
     case 'orbit':
       return orbit(agent,
         { x: command.targetShip.x, y: command.targetShip.y },
@@ -71,21 +55,40 @@ export function resolveCommand(ship: Ship, command: Command): SteeringOutput {
   }
 }
 
-/** Update command state (timers) then apply physics */
+/** Apply evasive jink on top of base steering */
+function applyEvasive(ship: Ship, base: SteeringOutput): SteeringOutput {
+  const ev = ship.evasive;
+  if (!ev) return base;
+
+  const agent = agentFromShip(ship);
+  const jinkTarget: Vec2 = {
+    x: ship.x + Math.cos(ship.angle + ev.jinkAngle) * 300,
+    y: ship.y + Math.sin(ship.angle + ev.jinkAngle) * 300,
+  };
+  const jink = seek(agent, jinkTarget);
+
+  return blendSteering([
+    { output: base, weight: 0.6 },
+    { output: jink, weight: 0.4 },
+  ]);
+}
+
+/** Update evasive jink timer, resolve command, apply physics */
 export function updateCommand(ship: Ship, dt: number): void {
-  if (!ship.command || !ship.physicsConfig) return;
+  if (!ship.physicsConfig) return;
 
-  const cmd = ship.command;
-
-  // Evasive jink timer
-  if (cmd.type === 'evasive') {
-    cmd.jinkTimer -= dt;
-    if (cmd.jinkTimer <= 0) {
-      cmd.jinkTimer = 0.3 + Math.random() * 0.5;
-      cmd.jinkAngle = (Math.random() - 0.5) * Math.PI * 1.5;
+  // Tick evasive jink
+  if (ship.evasive) {
+    ship.evasive.jinkTimer -= dt;
+    if (ship.evasive.jinkTimer <= 0) {
+      ship.evasive.jinkTimer = 0.3 + Math.random() * 0.5;
+      ship.evasive.jinkAngle = (Math.random() - 0.5) * Math.PI * 1.5;
     }
   }
 
-  const steering = resolveCommand(ship, cmd);
+  if (!ship.command) return;
+
+  let steering = resolveCommand(ship, ship.command);
+  steering = applyEvasive(ship, steering);
   updateShipPhysics(ship, steering, dt);
 }

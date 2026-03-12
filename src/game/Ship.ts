@@ -32,6 +32,7 @@ export interface Ship {
   abilityName: string;
   physicsConfig?: ShipPhysicsConfig;
   command?: Command;
+  evasive?: { jinkTimer: number; jinkAngle: number };
 }
 
 export type AbilityState =

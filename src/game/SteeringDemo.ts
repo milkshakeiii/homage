@@ -123,14 +123,8 @@ function loop(now: number) {
 
   if (consumeKey('e')) {
     for (const s of selected) {
-      s.command = {
-        type: 'evasive',
-        baseDir: s.angle + Math.PI,
-        jinkTimer: 0.3,
-        jinkAngle: 0,
-      };
+      s.evasive = s.evasive ? undefined : { jinkTimer: 0.3, jinkAngle: 0 };
     }
-    commandMode = 'none';
   }
 
   // Number keys to spawn ships at cursor position
@@ -259,7 +253,9 @@ function loop(now: number) {
   if (fpsTime >= 0.5) { fps = Math.round(frameCount / fpsTime); frameCount = 0; fpsTime = 0; }
 
   const selCount = selected.size;
+  const anyEvasive = [...selected].some(s => s.evasive);
   const modeLabel = commandMode !== 'none' ? ` | MODE: ${commandMode.toUpperCase()}` : '';
+  const evasiveLabel = anyEvasive ? ' | EVASIVE' : '';
   const patrolLabel = enemyPatrol ? ' | PATROL ON' : '';
   const zoomMeters = renderer.W / camera.zoom;
   let scaleLabel: string;
@@ -267,7 +263,7 @@ function loop(now: number) {
   else if (zoomMeters < 2000) scaleLabel = `~${(zoomMeters / 1000).toFixed(1)}km`;
   else scaleLabel = `~${Math.round(zoomMeters / 1000)}km`;
 
-  hudEl.innerHTML = `FPS: ${fps} | SHIPS: ${allShips.length} | SEL: ${selCount}${modeLabel}${patrolLabel}<br>ZOOM: ${camera.zoom.toFixed(3)} (${scaleLabel})`;
+  hudEl.innerHTML = `FPS: ${fps} | SHIPS: ${allShips.length} | SEL: ${selCount}${modeLabel}${evasiveLabel}${patrolLabel}<br>ZOOM: ${camera.zoom.toFixed(3)} (${scaleLabel})`;
 
   keysJustPressed.clear();
   requestAnimationFrame(loop);
