@@ -32,37 +32,41 @@ function spawn(defIdx: number, x: number, y: number, angle = 0): Ship {
 }
 
 // === Scene setup ===
-const ships: Ship[] = [];
+const fleet: Ship[] = [];     // player-controlled ships
 const enemyShips: Ship[] = [];
 
-// Player fleet
-const frigate = spawn(2, 0, 0);
-ships.push(frigate);
+// Main ship (the "hero")
+const mainShip = spawn(2, 0, 0);
+fleet.push(mainShip);
 
 // 4 corvettes in diamond
-ships.push(spawn(1, 200, 0));
-ships.push(spawn(1, -200, 0));
-ships.push(spawn(1, 0, 200));
-ships.push(spawn(1, 0, -200));
+fleet.push(spawn(1, 200, 0));
+fleet.push(spawn(1, -200, 0));
+fleet.push(spawn(1, 0, 200));
+fleet.push(spawn(1, 0, -200));
 
 // 2 skiffs
-ships.push(spawn(0, 500, 100));
-ships.push(spawn(0, 500, -100));
+fleet.push(spawn(0, 500, 100));
+fleet.push(spawn(0, 500, -100));
 
 // Enemy destroyer
 const enemyDestroyer = spawn(3, 1500, 0, Math.PI);
 enemyShips.push(enemyDestroyer);
 
-const allShips = [...ships, ...enemyShips];
+const allShips = [...fleet, ...enemyShips];
 
 // === Selection state ===
 let selected: Set<Ship> = new Set();
+selected.add(mainShip); // start with main ship selected
 let commandMode: 'none' | 'collisionCourse' | 'orbit' | 'keepAtRange' = 'none';
 let showDebug = false;
 let enemyPatrol = false;
 let enemyPatrolAngle = 0;
 
-// === Camera initial ===
+// === Camera ===
+const CAM_PAN_SPEED = 800; // world units per second at zoom=1
+camera.targetX = mainShip.x;
+camera.targetY = mainShip.y;
 camera.targetZoom = 0.5;
 
 // === Input handling ===
@@ -93,8 +97,14 @@ function findShipAtPoint(wx: number, wy: number, pool: Ship[]): Ship | null {
   return best;
 }
 
-function issueCommandToSelected(cmd: Command) {
-  for (const s of selected) {
+/** Ships that receive commands: selected ships, or main ship as fallback */
+function commandTargets(): Ship[] {
+  if (selected.size > 0) return [...selected];
+  return [mainShip];
+}
+
+function issueCommand(cmd: Command) {
+  for (const s of commandTargets()) {
     s.command = { ...cmd } as Command;
   }
 }
@@ -104,35 +114,75 @@ let lastTime = performance.now();
 let fps = 0, frameCount = 0, fpsTime = 0;
 
 function loop(now: number) {
-  const dt = Math.min((now - lastTime) / 1000, 0.05); // cap dt
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
   lastTime = now;
   const time = now / 1000;
 
-  // === HANDLE INPUT ===
+  // === CAMERA PANNING ===
+  const panSpeed = CAM_PAN_SPEED / camera.zoom * dt;
 
-  // Keyboard commands
-  if (consumeKey('s')) {
-    for (const s of selected) s.command = undefined;
+  // WASD
+  if (input.isDown('w')) camera.targetY -= panSpeed;
+  if (input.isDown('s')) camera.targetY += panSpeed;
+  if (input.isDown('a')) camera.targetX -= panSpeed;
+  if (input.isDown('d')) camera.targetX += panSpeed;
+
+  // Edge-pan (fullscreen only)
+  const edge = input.edgePan();
+  camera.targetX += edge.x * panSpeed;
+  camera.targetY += edge.y * panSpeed;
+
+  // Space: snap to main ship
+  if (consumeKey(' ')) {
+    camera.targetX = mainShip.x;
+    camera.targetY = mainShip.y;
+  }
+
+  // F: toggle fullscreen
+  if (consumeKey('f')) {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
+  }
+
+  // === COMMANDS ===
+  if (consumeKey('x')) {
+    for (const s of commandTargets()) s.command = undefined;
     commandMode = 'none';
   }
   if (consumeKey('c')) commandMode = 'collisionCourse';
   if (consumeKey('o')) commandMode = 'orbit';
   if (consumeKey('k')) commandMode = 'keepAtRange';
-  if (consumeKey('d')) showDebug = !showDebug;
-  if (consumeKey('t')) enemyPatrol = !enemyPatrol;
 
   if (consumeKey('e')) {
-    for (const s of selected) {
+    for (const s of commandTargets()) {
       s.evasive = s.evasive ? undefined : { jinkTimer: 0.3, jinkAngle: 0 };
     }
   }
+
+  // Tab: cycle selection through fleet
+  if (consumeKey('tab')) {
+    const current = selected.size === 1 ? [...selected][0] : null;
+    const idx = current ? fleet.indexOf(current) : -1;
+    const next = fleet[(idx + 1) % fleet.length];
+    selected.clear();
+    selected.add(next);
+  }
+
+  // Toggle enemy patrol
+  if (consumeKey('t')) enemyPatrol = !enemyPatrol;
+
+  // Toggle debug
+  if (consumeKey('g')) showDebug = !showDebug;
 
   // Number keys to spawn ships at cursor position
   for (let i = 0; i < 6; i++) {
     if (consumeKey(String(i + 1))) {
       const [wx, wy] = camera.screenToWorld(input.mouseX, input.mouseY, canvas.width, canvas.height);
       const s = spawn(i, wx, wy);
-      ships.push(s);
+      fleet.push(s);
       allShips.push(s);
     }
   }
@@ -141,19 +191,17 @@ function loop(now: number) {
   const click = input.consumeClick();
   if (click) {
     if (commandMode !== 'none') {
-      // Targeting click for command mode
       const target = findShipAtPoint(click[0], click[1], allShips);
       if (target && commandMode === 'collisionCourse') {
-        issueCommandToSelected({ type: 'collisionCourse', targetShip: target });
+        issueCommand({ type: 'collisionCourse', targetShip: target });
       } else if (target && commandMode === 'orbit') {
         const radius = target.def.length * 2;
-        issueCommandToSelected({ type: 'orbit', targetShip: target, radius, clockwise: true });
+        issueCommand({ type: 'orbit', targetShip: target, radius, clockwise: true });
       } else if (target && commandMode === 'keepAtRange') {
-        issueCommandToSelected({ type: 'keepAtRange', targetShip: target, range: 500 });
+        issueCommand({ type: 'keepAtRange', targetShip: target, range: 500 });
       }
       commandMode = 'none';
     } else {
-      // Selection click
       const hit = findShipAtPoint(click[0], click[1], allShips);
       if (hit) {
         if (input.shiftHeld) {
@@ -169,17 +217,28 @@ function loop(now: number) {
     }
   }
 
+  // Box-select
+  const box = input.consumeBoxSelect();
+  if (box) {
+    const wb = input.boxToWorld(box);
+    if (!input.shiftHeld) selected.clear();
+    for (const s of fleet) {
+      if (s.x >= wb.minX && s.x <= wb.maxX && s.y >= wb.minY && s.y <= wb.maxY) {
+        selected.add(s);
+      }
+    }
+  }
+
   // Right click — move command
   const rightClick = input.consumeRightClick();
-  if (rightClick && selected.size > 0) {
-    issueCommandToSelected({ type: 'move', target: { x: rightClick[0], y: rightClick[1] } });
+  if (rightClick) {
+    issueCommand({ type: 'move', target: { x: rightClick[0], y: rightClick[1] } });
     commandMode = 'none';
   }
 
   // === UPDATE ===
   camera.update(dt);
 
-  // Enemy patrol behavior
   if (enemyPatrol) {
     enemyPatrolAngle += 0.3 * dt;
     const cx = 1500, cy = 0, r = 600;
@@ -188,12 +247,10 @@ function loop(now: number) {
     enemyDestroyer.command = { type: 'move', target: { x: tx, y: ty } };
   }
 
-  // Update all ship commands/physics
   for (const s of allShips) {
     updateCommand(s, dt);
   }
 
-  // Update abilities & particles
   for (const s of allShips) updateAbility(s, time, particles);
   particles.update(dt);
 
@@ -202,9 +259,15 @@ function loop(now: number) {
   // === RENDER ===
   renderer.beginFrame(camera, time);
 
-  // Draw ships
   for (const ship of allShips) {
     renderer.drawShip(ship.buffers, ship.x, ship.y, ship.angle, viewMatrix, camera.zoom);
+  }
+
+  // Main ship persistent highlight (dimmer than selection ring)
+  if (!selected.has(mainShip)) {
+    const r = mainShip.def.length * 0.7;
+    renderer.dynCircle(mainShip.x, mainShip.y, r, 48);
+    renderer.dynFlush(viewMatrix, [0, 1, 1, 0.12]);
   }
 
   // Selection rings
@@ -214,7 +277,7 @@ function loop(now: number) {
     renderer.dynFlush(viewMatrix, [0, 1, 1, 0.3]);
   }
 
-  // Command mode indicator — draw ring around hovered target
+  // Command mode indicator
   if (commandMode !== 'none') {
     const [wx, wy] = camera.screenToWorld(input.mouseX, input.mouseY, canvas.width, canvas.height);
     const hover = findShipAtPoint(wx, wy, allShips);
@@ -225,8 +288,8 @@ function loop(now: number) {
     }
   }
 
-  // Move command target dots
-  for (const s of selected) {
+  // Move command target dots (shown for command targets, including main ship fallback)
+  for (const s of commandTargets()) {
     if (s.command?.type === 'move') {
       const t = s.command.target;
       renderer.dynCircle(t.x, t.y, 5 / camera.zoom, 12);
@@ -234,15 +297,21 @@ function loop(now: number) {
     }
   }
 
-  // Debug overlay
-  if (showDebug) {
-    drawDebug(viewMatrix);
+  // Box-select preview rectangle
+  if (input.boxDragging) {
+    const [wx0, wy0] = camera.screenToWorld(input.boxDragX0, input.boxDragY0, canvas.width, canvas.height);
+    const [wx1, wy1] = camera.screenToWorld(input.mouseX, input.mouseY, canvas.width, canvas.height);
+    const lw = 1.5 / camera.zoom;
+    renderer.dynLine(wx0, wy0, wx1, wy0, lw);
+    renderer.dynLine(wx1, wy0, wx1, wy1, lw);
+    renderer.dynLine(wx1, wy1, wx0, wy1, lw);
+    renderer.dynLine(wx0, wy1, wx0, wy0, lw);
+    renderer.dynLineFlush(viewMatrix, [0, 1, 0, 0.5]);
   }
 
-  // Draw ability effects
-  for (const s of allShips) drawAbility(s, renderer, viewMatrix, time, camera.zoom);
+  if (showDebug) drawDebug(viewMatrix);
 
-  // Draw particles
+  for (const s of allShips) drawAbility(s, renderer, viewMatrix, time, camera.zoom);
   particles.draw(renderer, viewMatrix);
 
   renderer.endFrame();
@@ -253,7 +322,7 @@ function loop(now: number) {
   if (fpsTime >= 0.5) { fps = Math.round(frameCount / fpsTime); frameCount = 0; fpsTime = 0; }
 
   const selCount = selected.size;
-  const anyEvasive = [...selected].some(s => s.evasive);
+  const anyEvasive = [...commandTargets()].some(s => s.evasive);
   const modeLabel = commandMode !== 'none' ? ` | MODE: ${commandMode.toUpperCase()}` : '';
   const evasiveLabel = anyEvasive ? ' | EVASIVE' : '';
   const patrolLabel = enemyPatrol ? ' | PATROL ON' : '';
@@ -275,15 +344,12 @@ function drawDebug(viewMatrix: Float32Array) {
   for (const s of allShips) {
     if (!s.physicsConfig) continue;
 
-    // Green: current velocity
     const velScale = 2;
     renderer.dynLine(s.x, s.y, s.x + s.vx * velScale, s.y + s.vy * velScale, lineHW);
     renderer.dynLineFlush(viewMatrix, [0, 1, 0, 0.7]);
 
-    // Yellow: desired heading direction (from command)
     if (s.command) {
       const headLen = s.def.length * 1.5;
-      // Compute desired angle from current command
       let desAngle = s.angle;
       if (s.command.type === 'move') {
         const dx = s.command.target.x - s.x;
@@ -297,7 +363,6 @@ function drawDebug(viewMatrix: Float32Array) {
       renderer.dynLineFlush(viewMatrix, [1, 1, 0, 0.5]);
     }
 
-    // Cyan: orbit/arrival radius
     if (s.command?.type === 'orbit') {
       const t = s.command.targetShip;
       renderer.dynCircle(t.x, t.y, s.command.radius, 48);
@@ -311,7 +376,6 @@ function drawDebug(viewMatrix: Float32Array) {
       }
     }
 
-    // Red dot: target ship position (intercept indicator)
     if (s.command?.type === 'collisionCourse') {
       const t = s.command.targetShip;
       const predX = t.x + t.vx * 0.5;
@@ -320,7 +384,6 @@ function drawDebug(viewMatrix: Float32Array) {
       renderer.dynFlush(viewMatrix, [1, 0, 0, 0.8]);
     }
 
-    // Keep at range — draw range ring
     if (s.command?.type === 'keepAtRange') {
       const t = s.command.targetShip;
       renderer.dynCircle(t.x, t.y, s.command.range, 48);
