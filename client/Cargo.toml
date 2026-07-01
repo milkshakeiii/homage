@@ -1,0 +1,9 @@
+[package]
+name = "homage_client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+homage_shared = { workspace = true }
+bevy = { workspace = true, features = ["2d", "multi_threaded"] }
+lightyear = { workspace = true }

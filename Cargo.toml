@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["shared", "server", "client"]
+
+[workspace.dependencies]
+homage_shared = { path = "shared" }
+bevy = { version = "0.19", default-features = false }
+lightyear = { version = "0.28", features = [
+  "client",
+  "server",
+  "replication",
+  "prediction",
+  "interpolation",
+  "input_native",
+  "netcode",
+  "udp",
+  "std",
+] }
+serde = { version = "1", features = ["derive"] }
+
+# Unoptimized Bevy is unplayably slow; optimize dependencies even in dev,
+# while keeping our own crates fast to compile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

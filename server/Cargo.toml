@@ -1,0 +1,15 @@
+[package]
+name = "homage_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+homage_shared = { workspace = true }
+bevy = { workspace = true, features = [
+  "std",
+  "bevy_log",
+  "bevy_state",
+  "async_executor",
+  "multi_threaded",
+] }
+lightyear = { workspace = true }

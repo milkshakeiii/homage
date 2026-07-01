@@ -1,0 +1,9 @@
+[package]
+name = "homage_shared"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true, features = ["std", "serialize", "bevy_color"] }
+lightyear = { workspace = true }
+serde = { workspace = true }
