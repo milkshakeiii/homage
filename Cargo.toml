@@ -15,6 +15,14 @@ lightyear = { version = "0.28", features = [
   "netcode",
   "udp",
   "std",
+  "avian2d",
+] }
+avian2d = { version = "0.7", default-features = false, features = [
+  "2d",
+  "f32",
+  "parry-f32",
+  "parallel",
+  "serialize",
 ] }
 serde = { version = "1", features = ["derive"] }
 

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+avian2d = { workspace = true }
 bevy = { workspace = true, features = ["std", "serialize", "bevy_color"] }
 lightyear = { workspace = true }
 serde = { workspace = true }

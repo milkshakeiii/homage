@@ -1,27 +1,29 @@
-//! Windowed client: connects to the server, predicts its own ship, and
-//! interpolates everyone else's.
+//! Windowed client: connects to the server, predicts its own ship and
+//! bullets, and interpolates everyone else's.
 //!
 //! Run with `cargo run -p homage_client -- <client_id>`. The id must be unique
 //! per connected client; it defaults to the process id so that launching
-//! several clients without arguments still works.
+//! several clients without arguments still works. Pass `bot` as a second
+//! argument for a self-driving client (constant thrust + turn + fire).
 
+use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use bevy::winit::WinitSettings;
 use core::net::{Ipv4Addr, SocketAddr};
 use core::time::Duration;
 use homage_shared::protocol::*;
-use homage_shared::ship;
+use homage_shared::sim;
+use homage_shared::SharedPlugin;
 use homage_shared::{FIXED_TIMESTEP_HZ, PRIVATE_KEY, PROTOCOL_ID, SERVER_ADDR};
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
 use lightyear::prelude::client::input::*;
-use lightyear::prelude::client::{InputDelayConfig, InputTimelineConfig};
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::*;
 use lightyear::prelude::*;
 
-/// When true, the client ignores the keyboard and constantly thrusts while
-/// turning — a self-driving client for testing replication without a human.
+/// When true, the client ignores the keyboard and constantly thrusts, turns,
+/// and fires — a self-driving client for testing without a human.
 #[derive(Resource)]
 struct BotMode(bool);
 
@@ -47,7 +49,7 @@ fn main() {
     app.add_plugins(ClientPlugins {
         tick_duration: Duration::from_secs_f64(1.0 / FIXED_TIMESTEP_HZ),
     });
-    app.add_plugins(ProtocolPlugin);
+    app.add_plugins(SharedPlugin);
     app.insert_resource(BotMode(bot));
 
     let auth = Authentication::Manual {
@@ -78,8 +80,11 @@ fn main() {
         FixedPreUpdate,
         buffer_input.in_set(InputSystems::WriteClientInputs),
     );
-    app.add_systems(FixedUpdate, (predicted_movement, log_ships).chain());
-    app.add_systems(Update, (draw_grid, draw_ships, camera_follow));
+    app.add_systems(FixedUpdate, log_ships);
+    app.add_systems(
+        Update,
+        (draw_grid, draw_ships, draw_bullets, camera_follow),
+    );
     app.add_observer(handle_controlled_spawn);
     app.run();
 }
@@ -121,6 +126,7 @@ fn buffer_input(
     if bot.0 {
         input.thrust = true;
         input.turn_left = true;
+        input.fire = true;
         action_state.0 = Inputs(input);
         return;
     }
@@ -133,75 +139,90 @@ fn buffer_input(
     if keypress.pressed(KeyCode::KeyD) || keypress.pressed(KeyCode::ArrowRight) {
         input.turn_right = true;
     }
+    if keypress.pressed(KeyCode::Space) {
+        input.fire = true;
+    }
     action_state.0 = Inputs(input);
 }
 
-/// Apply inputs to our predicted ship. The same `apply_ship_input` runs on the
-/// server; lightyear rolls back and re-simulates on mispredictions.
-fn predicted_movement(
-    synced_client: Query<(), (With<Client>, With<IsSynced<InputTimeline>>)>,
-    mut query: Query<
-        (
-            &mut ShipPosition,
-            &mut ShipHeading,
-            &mut ShipVelocity,
-            &ActionState<Inputs>,
-        ),
-        With<Predicted>,
-    >,
-) {
-    if synced_client.is_empty() {
-        return;
-    }
-    for (position, heading, velocity, action_state) in &mut query {
-        let Inputs(input) = &action_state.0;
-        ship::apply_ship_input(position, heading, velocity, input);
-    }
-}
-
-/// Periodic snapshot of the visual (predicted/interpolated) ships, for
-/// verifying replication without eyes on the window.
+/// Periodic snapshot of the visual entities, for verifying replication
+/// without eyes on the window.
 fn log_ships(
     mut ticks: Local<u32>,
-    query: Query<
-        (Entity, &ShipPosition, Has<Predicted>, Has<Interpolated>),
-        Or<(With<Predicted>, With<Interpolated>)>,
+    ships: Query<
+        (Entity, &Position, &Health, Has<Predicted>, Has<Interpolated>),
+        With<PlayerId>,
     >,
+    bullets: Query<(), With<BulletMarker>>,
 ) {
     *ticks += 1;
     if *ticks % 320 != 0 {
         return;
     }
-    for (entity, position, predicted, interpolated) in &query {
+    info!("{} bullet entities", bullets.iter().count());
+    for (entity, position, health, predicted, interpolated) in &ships {
         let kind = if predicted {
             "predicted"
         } else if interpolated {
             "interpolated"
         } else {
-            "?"
+            "confirmed"
         };
         info!(
-            "{kind} ship {entity:?} pos ({:.1}, {:.1})",
-            position.0.x, position.0.y
+            "{kind} ship {entity:?} pos ({:.1}, {:.1}) hp {}/{}",
+            position.0.x, position.0.y, health.current, health.max
         );
     }
 }
 
-/// Draw each ship as a triangle. Predicted (our ship) and Interpolated
-/// (everyone else) entities are the visual ones; the raw Confirmed copies
-/// have no visual.
+/// Draw each ship as a triangle plus a health bar. Predicted (our ship) and
+/// Interpolated (everyone else) entities are the visual ones; the raw
+/// Confirmed copies have no visual.
 fn draw_ships(
     mut gizmos: Gizmos,
     ships: Query<
-        (&ShipPosition, &ShipHeading, &PlayerColor),
-        Or<(With<Predicted>, With<Interpolated>)>,
+        (&Position, &Rotation, &PlayerColor, Option<&Health>),
+        (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
     >,
 ) {
-    for (position, heading, color) in &ships {
-        let nose = position.0 + Vec2::from_angle(heading.0) * 16.0;
-        let left = position.0 + Vec2::from_angle(heading.0 + 2.5) * 12.0;
-        let right = position.0 + Vec2::from_angle(heading.0 - 2.5) * 12.0;
+    for (position, rotation, color, health) in &ships {
+        let pos = position.0;
+        let nose = pos + *rotation * Vec2::new(sim::SHIP_LENGTH / 2.0, 0.0);
+        let left = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, sim::SHIP_WIDTH / 2.0);
+        let right = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, -sim::SHIP_WIDTH / 2.0);
         gizmos.linestrip_2d([nose, left, right, nose], color.0);
+
+        if let Some(health) = health {
+            let fraction = health.current as f32 / health.max as f32;
+            let half_width = sim::SHIP_LENGTH / 2.0;
+            let y = sim::SHIP_LENGTH / 2.0 + 8.0;
+            gizmos.line_2d(
+                pos + Vec2::new(-half_width, y),
+                pos + Vec2::new(-half_width + sim::SHIP_LENGTH * fraction, y),
+                Color::srgb(0.2, 1.0, 0.2),
+            );
+        }
+    }
+}
+
+/// Bullets: our own are predicted (PreSpawned before the server confirms),
+/// everyone else's are interpolated.
+fn draw_bullets(
+    mut gizmos: Gizmos,
+    bullets: Query<
+        (&Position, &PlayerColor),
+        (
+            With<BulletMarker>,
+            Or<(With<Predicted>, With<Interpolated>, With<PreSpawned>)>,
+        ),
+    >,
+) {
+    for (position, color) in &bullets {
+        gizmos.circle_2d(
+            Isometry2d::from_translation(position.0),
+            sim::BULLET_SIZE,
+            color.0,
+        );
     }
 }
 
@@ -228,7 +249,7 @@ fn draw_grid(mut gizmos: Gizmos) {
 
 /// Keep the camera centered on our predicted ship.
 fn camera_follow(
-    ship: Query<&ShipPosition, (With<Predicted>, With<InputMarker<Inputs>>)>,
+    ship: Query<&Position, (With<Predicted>, With<InputMarker<Inputs>>)>,
     mut camera: Query<&mut Transform, With<Camera2d>>,
 ) {
     let (Ok(position), Ok(mut transform)) = (ship.single(), camera.single_mut()) else {
