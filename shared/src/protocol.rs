@@ -107,7 +107,15 @@ pub struct OreFragment {
 pub enum HullKind {
     Fighter,
     Harvester,
+    Corvette,
 }
+
+/// Where a Gunship hull's turret points (world-space radians). Written from
+/// the owner's aim input in the shared sim; replicated so *other* clients
+/// can render the turret. The owning client renders from its own live input
+/// instead (zero latency).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TurretAim(pub f32);
 
 /// Client → server: what to fly on the next (re)spawn. Applied when the
 /// respawn happens; costs are deducted then (hulls are lost on death,
@@ -247,6 +255,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<PlayerId>().replicate();
         app.component::<Team>().replicate();
         app.component::<HullKind>().replicate();
+        app.component::<TurretAim>().replicate();
         app.component::<Mothership>().replicate();
         app.component::<PlayerColor>().replicate();
         app.component::<Health>().replicate();

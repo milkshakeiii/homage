@@ -60,6 +60,7 @@ impl Plugin for SharedPlugin {
             FixedUpdate,
             (
                 sim::player_movement,
+                sim::update_turrets,
                 sim::soft_boundary,
                 sim::clamp_ship_speed,
                 sim::shared_player_firing,

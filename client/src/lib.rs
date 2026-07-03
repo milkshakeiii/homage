@@ -64,6 +64,16 @@ struct TapBuffer {
     fire: bool,
 }
 
+/// Mouse state in world coordinates, tracked at render rate and sampled into
+/// `ShipInput.aim` / `cursor_*` each tick. Gunship turrets and (later)
+/// Captain ability targeting read these.
+#[derive(Resource, Default)]
+struct MouseWorld {
+    cursor: Vec2,
+    /// World-space angle from the local ship to the cursor.
+    aim: f32,
+}
+
 pub fn build_client_app(config: ClientConfig) -> App {
     let mut app = App::new();
     if config.headless {
@@ -88,6 +98,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.insert_resource(BotMode(config.bot));
     app.init_resource::<InputOverride>();
     app.init_resource::<TapBuffer>();
+    app.init_resource::<MouseWorld>();
 
     let auth = Authentication::Manual {
         server_addr: config.server_addr,
@@ -161,12 +172,16 @@ pub fn build_client_app(config: ClientConfig) -> App {
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
         app.add_systems(Startup, (setup_scene, setup_hud));
-        app.add_systems(Update, (accumulate_taps, update_hud, respawn_menu));
+        app.add_systems(
+            Update,
+            (accumulate_taps, track_mouse, update_hud, respawn_menu),
+        );
         app.add_systems(
             PostUpdate,
             (
                 draw_grid,
                 draw_ships,
+                draw_turrets,
                 draw_bullets,
                 draw_motherships,
                 draw_asteroids,
@@ -335,13 +350,21 @@ fn respawn_menu(
     }
     *visibility = Visibility::Visible;
 
-    let picked = if keys.just_pressed(KeyCode::Digit1) {
-        Some(hulls::PURCHASABLE[0])
-    } else if keys.just_pressed(KeyCode::Digit2) {
-        Some(hulls::PURCHASABLE[1])
-    } else {
-        None
-    };
+    const DIGITS: [KeyCode; 9] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    let picked = DIGITS
+        .iter()
+        .position(|key| keys.just_pressed(*key))
+        .and_then(|i| hulls::PURCHASABLE.get(i).copied());
     if let Some(hull) = picked {
         *chosen = Some(hull);
         if let Ok(mut sender) = sender.single_mut() {
@@ -425,9 +448,40 @@ fn handle_controlled_spawn(
 /// Catch `just_pressed` edges at render rate (there can be many frames per
 /// simulation tick) so quick taps survive until the next fixed tick samples
 /// them.
-fn accumulate_taps(mut taps: ResMut<TapBuffer>, keypress: Res<ButtonInput<KeyCode>>) {
-    if keypress.just_pressed(KeyCode::Space) {
+fn accumulate_taps(
+    mut taps: ResMut<TapBuffer>,
+    keypress: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+) {
+    if keypress.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left) {
         taps.fire = true;
+    }
+}
+
+/// Track the mouse in world space at render rate: cursor position and the
+/// aim angle from the local ship toward it.
+fn track_mouse(
+    windows: Query<&Window>,
+    camera: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    ship: Query<&Position, (With<Predicted>, With<InputMarker<Inputs>>)>,
+    mut mouse: ResMut<MouseWorld>,
+) {
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), camera.single())
+    else {
+        return;
+    };
+    let Some(screen) = window.cursor_position() else {
+        return;
+    };
+    let Ok(world) = camera.viewport_to_world_2d(camera_transform, screen) else {
+        return;
+    };
+    mouse.cursor = world;
+    if let Ok(position) = ship.single() {
+        let to_cursor = world - position.0;
+        if to_cursor.length_squared() > 1.0 {
+            mouse.aim = to_cursor.to_angle();
+        }
     }
 }
 
@@ -437,6 +491,8 @@ fn accumulate_taps(mut taps: ResMut<TapBuffer>, keypress: Res<ButtonInput<KeyCod
 fn buffer_input(
     mut query: Query<&mut ActionState<Inputs>, With<InputMarker<Inputs>>>,
     keypress: Option<Res<ButtonInput<KeyCode>>>,
+    mouse_buttons: Option<Res<ButtonInput<MouseButton>>>,
+    mouse: Res<MouseWorld>,
     bot: Res<BotMode>,
     scripted: Res<InputOverride>,
     mut taps: ResMut<TapBuffer>,
@@ -472,10 +528,15 @@ fn buffer_input(
     if keypress.pressed(KeyCode::KeyD) || keypress.pressed(KeyCode::ArrowRight) {
         input.turn_right = true;
     }
-    if keypress.pressed(KeyCode::Space) || taps.fire {
+    let mouse_held = mouse_buttons.is_some_and(|m| m.pressed(MouseButton::Left));
+    if keypress.pressed(KeyCode::Space) || mouse_held || taps.fire {
         input.fire = true;
     }
     taps.fire = false;
+    // Aim and cursor ride along on every input; hulls that don't use them
+    // ignore them (superset protocol, DESIGN §4.3).
+    input.set_aim_radians(mouse.aim);
+    input.set_cursor_world(mouse.cursor);
     action_state.0 = Inputs(input);
 }
 
@@ -571,6 +632,41 @@ fn draw_ships(
                 );
             }
         }
+    }
+}
+
+/// Gunship turrets: a hub and barrel drawn over the hull along the aim. The
+/// local ship reads its own live input (zero-latency, guidepost 1); remote
+/// ships read the replicated TurretAim.
+fn draw_turrets(
+    mut gizmos: Gizmos,
+    ships: Query<
+        (
+            &Position,
+            &PlayerColor,
+            &HullKind,
+            Option<&TurretAim>,
+            Option<&ActionState<Inputs>>,
+        ),
+        (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
+    >,
+) {
+    for (position, color, kind, turret, action) in &ships {
+        let stats = hulls::stats(*kind);
+        if stats.archetype != hulls::Archetype::Gunship {
+            continue;
+        }
+        let aim = action
+            .map(|a| a.0 .0.aim_radians())
+            .or(turret.map(|t| t.0));
+        let Some(aim) = aim else {
+            continue;
+        };
+        let dir = Vec2::from_angle(aim);
+        let hub = stats.width * 0.28;
+        let base = position.0;
+        gizmos.circle_2d(Isometry2d::from_translation(base), hub, color.0);
+        gizmos.line_2d(base + dir * hub, base + dir * (hub + 14.0), color.0);
     }
 }
 

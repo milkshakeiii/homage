@@ -121,10 +121,15 @@ fn kill_and_respawn_with_harvester(port: u16) -> TestNet {
 }
 
 fn kill_and_respawn_prepared(port: u16) -> TestNet {
+    kill_and_respawn_as(port, HullKind::Harvester)
+}
+
+/// Client 2 dies and respawns as `hull` (bankrolled); returns the net.
+fn kill_and_respawn_as(port: u16, hull: HullKind) -> TestNet {
     let mut net = TestNet::new(port, &[1, 2]);
     assert!(net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 2));
     net.set_bank(2, 100);
-    net.client_send_spawn_order(1, HullKind::Harvester);
+    net.client_send_spawn_order(1, hull);
     net.run_ticks(32);
     net.teleport(1, Vec2::ZERO, 0.0);
     net.teleport(2, Vec2::new(300.0, 0.0), 0.0);
@@ -137,4 +142,33 @@ fn kill_and_respawn_prepared(port: u16) -> TestNet {
         |net| net.server_ship(2).is_some()
     ));
     net
+}
+
+/// The Gunship archetype fires along the mouse aim, not the hull facing:
+/// a corvette pointing +X hits a target due +Y when the turret says so.
+#[test]
+fn corvette_turret_fires_along_aim_not_facing() {
+    let mut net = kill_and_respawn_as(6604, HullKind::Corvette);
+    assert_eq!(net.server_ship_hull(2), Some(HullKind::Corvette));
+
+    // Corvette (client 2) faces +X; the enemy fighter (client 1) sits due
+    // +Y of it. Only turret-aimed fire can connect.
+    net.teleport(2, Vec2::new(2000.0, 1000.0), 0.0);
+    net.teleport(1, Vec2::new(2000.0, 1300.0), 0.0);
+    net.run_ticks(64);
+
+    let mut input = ShipInput {
+        fire: true,
+        ..default()
+    };
+    input.set_aim_radians(core::f32::consts::FRAC_PI_2); // straight up
+    net.set_input(1, Some(input));
+
+    assert!(
+        net.run_until(1024, |net| net
+            .server_ship(1)
+            .is_some_and(|(_, health)| health < sim::SHIP_HEALTH)),
+        "turret-aimed fire never hit the +Y target (health {:?})",
+        net.server_ship(1)
+    );
 }

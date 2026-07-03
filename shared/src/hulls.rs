@@ -9,6 +9,16 @@
 use crate::protocol::HullKind;
 use crate::sim;
 
+/// How a hull is flown (DESIGN §4.1). Pilot: tank controls, weapons down the
+/// nose. Gunship: hull flies on momentum while the mouse aims an independent
+/// turret. Captain: omnidirectional drift + mouse-targeted abilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Archetype {
+    Pilot,
+    Gunship,
+    Captain,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct WeaponStats {
     pub cooldown_ticks: u16,
@@ -17,6 +27,7 @@ pub struct WeaponStats {
 
 #[derive(Debug, Clone, Copy)]
 pub struct HullStats {
+    pub archetype: Archetype,
     /// Resource cost to buy (0 = free default).
     pub cost: u32,
     pub health: u16,
@@ -37,6 +48,7 @@ pub struct HullStats {
 }
 
 const FIGHTER: HullStats = HullStats {
+    archetype: Archetype::Pilot,
     cost: 0,
     health: sim::SHIP_HEALTH,
     cargo_capacity: sim::FIGHTER_CARGO_CAPACITY,
@@ -57,6 +69,7 @@ const FIGHTER: HullStats = HullStats {
 /// ponderous, and armed with a token self-defense pea-shooter. Its skill
 /// expression is route planning and load management, not dogfighting.
 const HARVESTER: HullStats = HullStats {
+    archetype: Archetype::Pilot,
     cost: 15,
     health: 5,
     cargo_capacity: 50,
@@ -73,19 +86,43 @@ const HARVESTER: HullStats = HullStats {
     }),
 };
 
+/// The anti-fighter screen (DESIGN §5): the first Gunship hull. The hull is
+/// quick but deliberate; the mouse-aimed turret is the fast part. Rapid,
+/// short-cooldown shots reward tracking.
+const CORVETTE: HullStats = HullStats {
+    archetype: Archetype::Gunship,
+    cost: 25,
+    health: 4,
+    cargo_capacity: 3,
+    accel: 320.0,
+    brake: 460.0,
+    turn_speed: 2.8,
+    max_speed: 380.0,
+    length: 36.0,
+    width: 24.0,
+    hit_radius: 14.0,
+    weapon: Some(WeaponStats {
+        cooldown_ticks: 9,
+        bullet_speed: 560.0,
+    }),
+};
+
 pub fn stats(kind: HullKind) -> &'static HullStats {
     match kind {
         HullKind::Fighter => &FIGHTER,
         HullKind::Harvester => &HARVESTER,
+        HullKind::Corvette => &CORVETTE,
     }
 }
 
 /// Hulls offered in the respawn menu, in display order.
-pub const PURCHASABLE: [HullKind; 2] = [HullKind::Fighter, HullKind::Harvester];
+pub const PURCHASABLE: [HullKind; 3] =
+    [HullKind::Fighter, HullKind::Harvester, HullKind::Corvette];
 
 pub fn display_name(kind: HullKind) -> &'static str {
     match kind {
         HullKind::Fighter => "Fighter",
         HullKind::Harvester => "Harvester",
+        HullKind::Corvette => "Corvette",
     }
 }

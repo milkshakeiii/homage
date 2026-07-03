@@ -139,6 +139,7 @@ pub fn ship_bundle(client_id: PeerId, team: Team, kind: HullKind) -> impl Bundle
         Health::new(stats.health),
         Weapon::new(weapon.cooldown_ticks, weapon.bullet_speed),
         CargoHold::empty(stats.cargo_capacity),
+        TurretAim(0.0),
         position,
         rotation,
         ship_physics(kind),
@@ -276,6 +277,22 @@ pub fn clamp_ship_speed(
     }
 }
 
+/// Gunship turrets track the owner's aim input (server-side for all ships,
+/// from replicated inputs). Cosmetic for remote rendering; firing reads the
+/// aim input directly so this never affects hit registration.
+pub fn update_turrets(
+    mut query: Query<(&ActionState<Inputs>, &HullKind, &mut TurretAim), With<PlayerId>>,
+) {
+    for (action_state, kind, mut turret) in &mut query {
+        if crate::hulls::stats(*kind).archetype == crate::hulls::Archetype::Gunship {
+            let aim = action_state.0 .0.aim_radians();
+            if turret.0 != aim {
+                turret.0 = aim;
+            }
+        }
+    }
+}
+
 /// Soft map boundary (DESIGN §8): a push-back force that ramps up over
 /// `BOUNDARY_MARGIN` outside the play area instead of a hard wall. Runs in
 /// the shared sim so the predicted ship feels it with zero latency.
@@ -362,9 +379,14 @@ pub fn shared_player_firing(
         weapon.last_fire_tick = current_tick;
         weapon.fire_requested = None;
 
-        // The bullet spawns off the nose and inherits the ship's velocity.
+        // Pilot hulls fire down the nose; Gunship hulls fire along the
+        // mouse-aimed turret. Both spawn the bullet clear of the hull and
+        // inherit the ship's velocity (guidepost 3).
         let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
-        let forward = *rotation * Vec2::X;
+        let forward = match stats.archetype {
+            crate::hulls::Archetype::Gunship => Vec2::from_angle(input.aim_radians()),
+            _ => *rotation * Vec2::X,
+        };
         let origin = position.0 + forward * (stats.length / 2.0 + BULLET_SIZE + 2.0);
         let bullet_velocity = forward * weapon.bullet_speed + velocity.0;
 
