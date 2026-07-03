@@ -121,6 +121,34 @@ fn brake_stops_faster_than_coasting() {
     );
 }
 
+/// The client's own ship must advance every tick under thrust. If prediction
+/// degrades to snapping on server updates (e.g. the predicted entity is
+/// missing its physics components, so avian never integrates it locally),
+/// the position freezes between packets — 20Hz stutter and input response
+/// delayed by a round trip. Regression test for exactly that failure.
+#[test]
+fn predicted_ship_moves_every_tick_under_thrust() {
+    let mut net = connect_one(6205);
+    net.set_input(0, thrust());
+    net.run_ticks(64); // get up to speed and past any spawn settling
+
+    let mut last = net.predicted_ship_pos(0).expect("predicted ship exists");
+    let mut static_ticks = 0;
+    for _ in 0..64 {
+        net.tick();
+        let pos = net.predicted_ship_pos(0).expect("predicted ship exists");
+        if pos.distance(last) < 0.01 {
+            static_ticks += 1;
+        }
+        last = pos;
+    }
+    assert!(
+        static_ticks <= 6,
+        "predicted ship froze on {static_ticks}/64 ticks while thrusting — \
+         client-side prediction is not integrating"
+    );
+}
+
 /// Feel guidepost 5: a fire tap during cooldown is buffered and fires on the
 /// first legal tick instead of being eaten.
 #[test]

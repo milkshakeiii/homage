@@ -47,6 +47,20 @@ fn ship_collider() -> Collider {
     .expect("ship collider hull")
 }
 
+/// The physics components a simulated ship needs. Used by the server when
+/// spawning, and by the client for its *predicted* ship copy: physics
+/// components aren't replicated, and without a RigidBody avian never
+/// integrates the predicted ship's position — prediction degrades to
+/// snapping to server updates.
+pub fn ship_physics() -> impl Bundle {
+    (
+        RigidBody::Dynamic,
+        ship_collider(),
+        ColliderDensity(1.0),
+        LinearDamping(SHIP_DAMPING),
+    )
+}
+
 /// Deterministic spawn spot: spread around a ring, facing outward.
 pub fn spawn_pose(client_id: PeerId) -> (Position, Rotation) {
     let angle = (client_id.to_bits() % 16) as f32 / 16.0 * TAU;
@@ -67,10 +81,7 @@ pub fn ship_bundle(client_id: PeerId) -> impl Bundle {
         Weapon::new(FIRE_COOLDOWN_TICKS, BULLET_SPEED),
         position,
         rotation,
-        RigidBody::Dynamic,
-        ship_collider(),
-        ColliderDensity(1.0),
-        LinearDamping(SHIP_DAMPING),
+        ship_physics(),
         Name::from("Ship"),
     )
 }

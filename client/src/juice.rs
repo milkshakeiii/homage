@@ -7,8 +7,10 @@
 use avian2d::prelude::{LinearVelocity, Position, Rotation};
 use bevy::audio::{AudioPlayer, AudioSource, PlaybackSettings, Volume};
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
 use homage_shared::protocol::*;
 use homage_shared::sim;
+use lightyear::frame_interpolation::prelude::FrameInterpolationSystems;
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::*;
 use lightyear::prelude::*;
@@ -51,13 +53,21 @@ impl Plugin for JuicePlugin {
                 detect_damage,
                 detect_own_fire,
                 ensure_trails,
-                update_trails,
-                draw_trails,
+                decay_shake,
+            ),
+        );
+        // Visual systems read Position/Rotation after frame interpolation has
+        // written the smooth between-ticks values; the camera must also move
+        // before bevy propagates transforms for rendering.
+        app.add_systems(
+            PostUpdate,
+            (
+                (update_trails, draw_trails).chain(),
                 draw_thrust_flare,
                 draw_kill_rings,
-                decay_shake,
-                camera_follow,
-            ),
+                camera_follow.before(TransformSystems::Propagate),
+            )
+                .after(FrameInterpolationSystems::Interpolate),
         );
     }
 }

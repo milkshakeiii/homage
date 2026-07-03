@@ -17,6 +17,7 @@ use homage_shared::protocol::*;
 use homage_shared::sim;
 use homage_shared::SharedPlugin;
 use homage_shared::{FIXED_TIMESTEP_HZ, PRIVATE_KEY, PROTOCOL_ID};
+use lightyear::frame_interpolation::prelude::*;
 use lightyear::netcode::client_plugin::NetcodeConfig;
 use lightyear::netcode::NetcodeClient;
 use lightyear::prelude::client::input::*;
@@ -119,15 +120,113 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.add_systems(FixedUpdate, log_ships);
     app.add_observer(handle_controlled_spawn);
 
+    // The simulation steps at 64Hz but the display renders faster, so
+    // predicted entities (which only move on fixed ticks) would judder.
+    // Frame interpolation writes a between-ticks visual value into
+    // Position/Rotation during PostUpdate; every draw/camera system runs
+    // after it (see JuicePlugin) so gizmos see the smooth values.
+    // Enabled in headless mode too so the e2e harness exercises it.
+    app.add_plugins((
+        FrameInterpolationPlugin::<Position>::default(),
+        FrameInterpolationPlugin::<Rotation>::default(),
+    ));
+    // lightyear 0.28 bug workaround: FrameInterpolationPlugin puts its
+    // history-capture system in FixedPostUpdate but configures its set's
+    // ordering in FixedLast, leaving the capture UNORDERED against avian's
+    // position integration (also FixedPostUpdate). If it captures before
+    // physics runs, the captured "current" value is the pre-physics one that
+    // Restore just wrote, so previous == current forever: interpolation
+    // becomes a no-op AND Restore keeps stomping the physics result — the
+    // predicted ship only visibly moves on server-forced rollbacks (~20Hz
+    // stutter, input response delayed by a round trip). Ordering the capture
+    // after the physics step fixes both.
+    app.configure_sets(
+        FixedPostUpdate,
+        lightyear::frame_interpolation::FrameInterpolationSystems::Update
+            .after(avian2d::prelude::PhysicsSystems::StepSimulation),
+    );
+    app.add_observer(add_frame_interpolation::<Predicted>);
+    app.add_observer(add_frame_interpolation::<PreSpawned>);
+    // Physics components aren't replicated, so the predicted ship arrives
+    // without a RigidBody — and avian silently ignores it: no local
+    // integration, prediction degrades to 20Hz snap-to-server. Give every
+    // predicted ship its physics locally. (Remote ships stay non-physical:
+    // interpolation owns their pose. Ship-ship contact prediction is a
+    // known gap for later.)
+    app.add_systems(Update, add_predicted_ship_physics);
+
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
         app.add_systems(Startup, setup_scene);
+        app.add_systems(Update, accumulate_taps);
         app.add_systems(
-            Update,
-            (accumulate_taps, draw_grid, draw_ships, draw_bullets),
+            PostUpdate,
+            (draw_grid, draw_ships, draw_bullets)
+                .after(FrameInterpolationSystems::Interpolate),
         );
+        // HOMAGE_MOTION_DEBUG=1: log the per-frame movement of the ship as
+        // the renderer sees it, to quantify visual stutter (a healthy smooth
+        // ship never shows delta=0 frames while under thrust).
+        if std::env::var("HOMAGE_MOTION_DEBUG").is_ok() {
+            app.add_systems(
+                PostUpdate,
+                log_motion.after(FrameInterpolationSystems::Interpolate),
+            );
+        }
     }
     app
+}
+
+fn log_motion(
+    time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
+    mut last: Local<Option<Vec2>>,
+    ship: Query<
+        (&Position, &avian2d::prelude::LinearVelocity),
+        (With<Predicted>, With<InputMarker<Inputs>>),
+    >,
+) {
+    let Ok((position, velocity)) = ship.single() else {
+        return;
+    };
+    if let Some(prev) = *last {
+        info!(
+            "MOTION dt={:.5} delta={:.4} overstep={:.3} pos=({:.2},{:.2}) vel=({:.1},{:.1})",
+            time.delta_secs(),
+            position.0.distance(prev),
+            fixed.overstep_fraction(),
+            position.0.x,
+            position.0.y,
+            velocity.0.x,
+            velocity.0.y,
+        );
+    }
+    *last = Some(position.0);
+}
+
+/// Locally-simulated entities (our predicted ship, prespawned bullets) step
+/// at 64Hz; mark their pose for between-ticks visual interpolation.
+fn add_frame_interpolation<M: Component>(trigger: On<Add, M>, mut commands: Commands) {
+    commands.entity(trigger.entity).try_insert((
+        FrameInterpolate::<Position>::default(),
+        FrameInterpolate::<Rotation>::default(),
+    ));
+}
+
+fn add_predicted_ship_physics(
+    ships: Query<
+        Entity,
+        (
+            With<PlayerId>,
+            With<Predicted>,
+            Without<avian2d::prelude::RigidBody>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for entity in &ships {
+        commands.entity(entity).try_insert(sim::ship_physics());
+    }
 }
 
 fn setup_scene(mut commands: Commands) {
