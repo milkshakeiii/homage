@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 avian2d = { workspace = true }
 homage_shared = { workspace = true }
-bevy = { workspace = true, features = ["2d", "multi_threaded"] }
+bevy = { workspace = true, features = ["2d", "multi_threaded", "bevy_state"] }
 lightyear = { workspace = true }
