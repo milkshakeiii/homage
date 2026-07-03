@@ -5,6 +5,8 @@
 //! through `build_client_app`; headless mode swaps DefaultPlugins for
 //! MinimalPlugins and skips the rendering systems.
 
+pub mod juice;
+
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
@@ -118,16 +120,11 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.add_observer(handle_controlled_spawn);
 
     if !config.headless {
+        app.add_plugins(juice::JuicePlugin);
         app.add_systems(Startup, setup_scene);
         app.add_systems(
             Update,
-            (
-                accumulate_taps,
-                draw_grid,
-                draw_ships,
-                draw_bullets,
-                camera_follow,
-            ),
+            (accumulate_taps, draw_grid, draw_ships, draw_bullets),
         );
     }
     app
@@ -246,20 +243,38 @@ fn log_ships(
 
 /// Draw each ship as a triangle plus a health bar. Predicted (our ship) and
 /// Interpolated (everyone else) entities are the visual ones; the raw
-/// Confirmed copies have no visual.
+/// Confirmed copies have no visual. Ships flash white while a recent hit's
+/// `FlashUntil` is active.
 fn draw_ships(
     mut gizmos: Gizmos,
+    time: Res<Time>,
     ships: Query<
-        (&Position, &Rotation, &PlayerColor, Option<&Health>),
+        (
+            &Position,
+            &Rotation,
+            &PlayerColor,
+            Option<&Health>,
+            Option<&juice::FlashUntil>,
+        ),
         (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
     >,
 ) {
-    for (position, rotation, color, health) in &ships {
+    for (position, rotation, color, health, flash) in &ships {
+        let flashing = flash.is_some_and(|f| time.elapsed_secs() < f.0);
+        let draw_color = if flashing { Color::WHITE } else { color.0 };
         let pos = position.0;
         let nose = pos + *rotation * Vec2::new(sim::SHIP_LENGTH / 2.0, 0.0);
         let left = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, sim::SHIP_WIDTH / 2.0);
         let right = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, -sim::SHIP_WIDTH / 2.0);
-        gizmos.linestrip_2d([nose, left, right, nose], color.0);
+        gizmos.linestrip_2d([nose, left, right, nose], draw_color);
+        if flashing {
+            // Second, slightly larger outline so the flash pops at a glance.
+            let grow = 1.35;
+            let nose = pos + (nose - pos) * grow;
+            let left = pos + (left - pos) * grow;
+            let right = pos + (right - pos) * grow;
+            gizmos.linestrip_2d([nose, left, right, nose], Color::WHITE.with_alpha(0.6));
+        }
 
         if let Some(health) = health {
             let fraction = health.current as f32 / health.max as f32;
@@ -314,16 +329,4 @@ fn draw_grid(mut gizmos: Gizmos) {
             color,
         );
     }
-}
-
-/// Keep the camera centered on our predicted ship.
-fn camera_follow(
-    ship: Query<&Position, (With<Predicted>, With<InputMarker<Inputs>>)>,
-    mut camera: Query<&mut Transform, With<Camera2d>>,
-) {
-    let (Ok(position), Ok(mut transform)) = (ship.single(), camera.single_mut()) else {
-        return;
-    };
-    transform.translation.x = position.0.x;
-    transform.translation.y = position.0.y;
 }

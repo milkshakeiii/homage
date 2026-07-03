@@ -61,4 +61,5 @@ cargo run -p homage_client -- 1
 cargo run -p homage_client -- 2
 ```
 
-Controls: `W`/`↑` thrust, `A`/`←` and `D`/`→` turn, `Space` fire.
+Controls: `W`/`↑` thrust, `S`/`↓` brake, `A`/`←` and `D`/`→` turn, `Space`
+fire. (Pilot-archetype hulls; see DESIGN.md §4.1 for the other archetypes.)
