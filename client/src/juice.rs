@@ -52,6 +52,7 @@ impl Plugin for JuicePlugin {
                 detect_damage,
                 detect_own_fire,
                 detect_deposit,
+                animate_popups,
                 ensure_trails,
                 decay_shake,
             ),
@@ -406,23 +407,67 @@ fn draw_deposit_beam(
     }
 }
 
-/// A soft chime every time the local bank ticks up.
+/// Floating feedback text ("+1" on a banked unit): drifts up and fades.
+#[derive(Component)]
+struct FadePopup {
+    born: f32,
+}
+
+const POPUP_SECS: f32 = 0.9;
+const POPUP_DRIFT: f32 = 38.0; // units/s upward
+
+/// A soft chime and a floating "+N" every time the local bank ticks up.
 fn detect_deposit(
     mut commands: Commands,
+    time: Res<Time>,
     mut last_bank: Local<Option<u32>>,
-    ship: Query<&Bank, (With<Predicted>, With<InputMarker<Inputs>>)>,
+    ship: Query<(&Bank, &Position), (With<Predicted>, With<InputMarker<Inputs>>)>,
     sfx: Option<Res<Sfx>>,
 ) {
-    let Ok(bank) = ship.single() else {
+    let Ok((bank, position)) = ship.single() else {
         *last_bank = None;
         return;
     };
-    if last_bank.is_some_and(|previous| bank.0 > previous) {
-        if let Some(sfx) = &sfx {
-            play(&mut commands, &sfx.chime, 0.3);
+    if let Some(previous) = *last_bank {
+        if bank.0 > previous {
+            if let Some(sfx) = &sfx {
+                play(&mut commands, &sfx.chime, 0.3);
+            }
+            commands.spawn((
+                FadePopup {
+                    born: time.elapsed_secs(),
+                },
+                Text2d::new(format!("+{}", bank.0 - previous)),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.85, 0.3)),
+                Transform::from_translation(
+                    (position.0 + Vec2::new(0.0, sim::SHIP_LENGTH)).extend(5.0),
+                ),
+            ));
         }
     }
     *last_bank = Some(bank.0);
+}
+
+/// Drift popups upward and fade them out.
+fn animate_popups(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut popups: Query<(Entity, &FadePopup, &mut Transform, &mut TextColor)>,
+) {
+    let now = time.elapsed_secs();
+    for (entity, popup, mut transform, mut color) in &mut popups {
+        let age = now - popup.born;
+        if age > POPUP_SECS {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation.y += POPUP_DRIFT * time.delta_secs();
+        color.0 = color.0.with_alpha(1.0 - age / POPUP_SECS);
+    }
 }
 
 // SFX (synthesized placeholders — no asset files)

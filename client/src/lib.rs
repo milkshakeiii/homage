@@ -183,6 +183,11 @@ pub fn build_client_app(config: ClientConfig) -> App {
                 log_motion.after(FrameInterpolationSystems::Interpolate),
             );
         }
+        // HOMAGE_HUD_DEBUG=1: log the HUD text's computed layout size, to
+        // verify UI text actually renders (headless tests can't see it).
+        if std::env::var("HOMAGE_HUD_DEBUG").is_ok() {
+            app.add_systems(Update, log_hud_layout);
+        }
     }
     app
 }
@@ -275,9 +280,9 @@ struct HudText;
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         HudText,
-        Text::new("Ore: 0"),
+        Text::new("Banked: 0"),
         TextFont {
-            font_size: FontSize::Px(18.0),
+            font_size: FontSize::Px(22.0),
             ..default()
         },
         TextColor(Color::srgb(1.0, 0.85, 0.3)),
@@ -288,6 +293,20 @@ fn setup_hud(mut commands: Commands) {
             ..default()
         },
     ));
+}
+
+fn log_hud_layout(
+    mut ticks: Local<u32>,
+    hud: Query<(&Text, &ComputedNode), With<HudText>>,
+) {
+    *ticks += 1;
+    if *ticks % 60 != 0 {
+        return;
+    }
+    match hud.single() {
+        Ok((text, node)) => info!("HUD size={:?} text={:?}", node.size, text.0),
+        Err(e) => info!("HUD query failed: {e}"),
+    }
 }
 
 /// Bank and hold of the local ship, top-left.
@@ -303,7 +322,7 @@ fn update_hud(
     };
     let bank = bank.map_or(0, |b| b.0);
     let (held, capacity) = cargo.map_or((0, 0), |c| (c.current, c.capacity));
-    text.0 = format!("Ore: {bank}   Hold: {held}/{capacity}");
+    text.0 = format!("Banked: {bank}   Hold: {held}/{capacity}");
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {

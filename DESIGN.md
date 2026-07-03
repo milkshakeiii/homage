@@ -58,6 +58,12 @@ skill expression is real: crack the rock so the fragments scatter toward your
 team, chase drifting fragments, thread a debris field under fire. No
 click-and-wait mining beam.
 
+*Validated in play (Henry, M1):* forgiving enough for a first try, but the
+hone-able skill emerged as intended — crack the rock **while flying toward
+it**, then fly a tight loop through the debris before it disperses. Tuning
+that changes fragment scatter speed or TTL should preserve that
+close-the-distance-then-loop rhythm.
+
 **Cargo (APPROVED):** every hull has a cargo capacity; the harvester's dwarfs
 everyone else's (order of 10x a fighter's). Carried ore adds mass — a loaded
 harvester accelerates and turns noticeably worse, so hauling home through
