@@ -100,6 +100,107 @@ fn a_full_hold_rejects_further_scooping() {
 }
 
 #[test]
+fn depositing_at_the_mothership_banks_resources() {
+    let mut net = connect_one(6505);
+    let team = net.server_ship_team(1).unwrap();
+
+    // Loaded ship parked inside its own mothership's deposit radius.
+    net.set_ship_cargo(1, u16::MAX); // clamps to capacity (5)
+    net.teleport(
+        1,
+        sim::team_anchor(team) + Vec2::new(sim::MOTHERSHIP_RADIUS + 60.0, 0.0),
+        0.0,
+    );
+
+    let capacity = net.server_ship_cargo(1).unwrap().1 as u32;
+    assert!(
+        net.run_until(512, |net| net.server_bank(1) == capacity
+            && net.server_ship_cargo(1).is_some_and(|(current, _)| current == 0)),
+        "deposit never completed: bank {} cargo {:?}",
+        net.server_bank(1),
+        net.server_ship_cargo(1)
+    );
+
+    // The bank value reaches the owning client's HUD.
+    assert!(
+        net.run_until(256, |net| net.client_bank(0) == Some(capacity)),
+        "bank never replicated to client: {:?}",
+        net.client_bank(0)
+    );
+}
+
+#[test]
+fn enemy_dropoffs_refuse_your_ore() {
+    let mut net = connect_one(6506);
+    let team = net.server_ship_team(1).unwrap();
+
+    net.set_ship_cargo(1, u16::MAX);
+    net.teleport(
+        1,
+        sim::team_anchor(team.opponent()) + Vec2::new(sim::MOTHERSHIP_RADIUS + 60.0, 0.0),
+        0.0,
+    );
+    net.run_ticks(256);
+    assert_eq!(net.server_bank(1), 0, "enemy dropoff accepted a deposit");
+    let (current, capacity) = net.server_ship_cargo(1).unwrap();
+    assert_eq!(current, capacity, "cargo drained at an enemy dropoff");
+}
+
+#[test]
+fn dying_with_cargo_drops_it_and_keeps_the_bank() {
+    let mut net = TestNet::new(6507, &[1, 2]);
+    assert!(
+        net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 2),
+        "clients never connected"
+    );
+
+    // Victim (client 2) has banked ore AND a full hold.
+    net.set_ship_cargo(2, u16::MAX);
+    let world = net.server.world_mut();
+    world
+        .resource_mut::<homage_server::Banks>()
+        .0
+        .insert(lightyear::prelude::PeerId::Netcode(2), 7);
+
+    // Line up the (opposite-team) kill far from everything.
+    net.teleport(1, Vec2::ZERO, 0.0);
+    net.teleport(2, Vec2::new(300.0, 0.0), 0.0);
+    net.run_ticks(64);
+    let dropped_expected = net.server_ship_cargo(2).unwrap().0 as usize;
+    assert!(dropped_expected > 0);
+
+    net.set_input(0, fire());
+    assert!(
+        net.run_until(2048, |net| net.server_ship(2).is_none()),
+        "target never died"
+    );
+    net.set_input(0, Some(ShipInput::default()));
+
+    // The hold scattered as scoopable fragments; the bank survived.
+    assert!(
+        net.server_fragment_count() >= dropped_expected,
+        "expected >= {dropped_expected} dropped fragments, found {}",
+        net.server_fragment_count()
+    );
+    assert_eq!(net.server_bank(2), 7, "bank must survive death");
+
+    // And the respawned ship comes back with an empty hold + intact bank.
+    assert!(
+        net.run_until(
+            sim::RESPAWN_DELAY_TICKS as usize + 256,
+            |net| net.server_ship(2).is_some()
+        ),
+        "target never respawned"
+    );
+    assert_eq!(net.server_ship_cargo(2).unwrap().0, 0);
+    assert!(
+        net.run_until(256, |net| net.client_bank(1) == Some(7)),
+        "respawned ship's bank not replicated: {:?}",
+        net.client_bank(1)
+    );
+}
+
+#[test]
 fn cargo_mass_slows_the_ship() {
     let mut net = connect_one(6504);
 

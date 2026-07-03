@@ -126,6 +126,12 @@ impl CargoHold {
     }
 }
 
+/// Deposited resources (the player's personal bank, DESIGN §3). The
+/// authoritative store lives in a server-side map keyed by player so it
+/// survives death; this component mirrors it onto the ship for display.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Bank(pub u32);
+
 /// Per-player color within the team's hue band: friend-or-foe is readable at
 /// a glance, individuals still distinguishable.
 pub fn color_from_id(client_id: PeerId, team: Team) -> Color {
@@ -217,6 +223,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Asteroid>().replicate();
         app.component::<OreFragment>().replicate();
         app.component::<CargoHold>().replicate();
+        app.component::<Bank>().replicate();
 
         app.component::<Weapon>().replicate().predict();
 

@@ -13,7 +13,6 @@ use homage_client::{build_client_app, ClientConfig, InputOverride};
 use homage_server::{build_server_app, AsteroidFieldConfig};
 use homage_shared::protocol::*;
 use homage_shared::{sim, FIXED_TIMESTEP_HZ};
-use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 /// One simulation tick of virtual time.
@@ -197,6 +196,24 @@ impl TestNet {
                 hold.current = current.min(hold.capacity);
             }
         }
+    }
+
+    /// Server-authoritative bank balance for a client.
+    pub fn server_bank(&mut self, client_id: u64) -> u32 {
+        self.server
+            .world()
+            .resource::<homage_server::Banks>()
+            .0
+            .get(&PeerId::Netcode(client_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The bank value replicated onto a client's own ship.
+    pub fn client_bank(&mut self, client_idx: usize) -> Option<u32> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query_filtered::<&Bank, With<Predicted>>();
+        query.iter(world).next().map(|bank| bank.0)
     }
 
     /// Which team the server put a client's ship on.

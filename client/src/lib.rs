@@ -160,8 +160,8 @@ pub fn build_client_app(config: ClientConfig) -> App {
 
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
-        app.add_systems(Startup, setup_scene);
-        app.add_systems(Update, accumulate_taps);
+        app.add_systems(Startup, (setup_scene, setup_hud));
+        app.add_systems(Update, (accumulate_taps, update_hud));
         app.add_systems(
             PostUpdate,
             (
@@ -266,6 +266,44 @@ fn add_structure_colliders(
 
 fn setup_scene(mut commands: Commands) {
     commands.spawn(Camera2d);
+}
+
+/// Marker for the ore/bank HUD line.
+#[derive(Component)]
+struct HudText;
+
+fn setup_hud(mut commands: Commands) {
+    commands.spawn((
+        HudText,
+        Text::new("Ore: 0"),
+        TextFont {
+            font_size: FontSize::Px(18.0),
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.85, 0.3)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            left: Val::Px(12.0),
+            ..default()
+        },
+    ));
+}
+
+/// Bank and hold of the local ship, top-left.
+fn update_hud(
+    ship: Query<
+        (Option<&Bank>, Option<&CargoHold>),
+        (With<Predicted>, With<InputMarker<Inputs>>),
+    >,
+    mut hud: Query<&mut Text, With<HudText>>,
+) {
+    let (Ok((bank, cargo)), Ok(mut text)) = (ship.single(), hud.single_mut()) else {
+        return;
+    };
+    let bank = bank.map_or(0, |b| b.0);
+    let (held, capacity) = cargo.map_or((0, 0), |c| (c.current, c.capacity));
+    text.0 = format!("Ore: {bank}   Hold: {held}/{capacity}");
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {

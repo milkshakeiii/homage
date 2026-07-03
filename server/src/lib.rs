@@ -72,6 +72,12 @@ struct RespawnTask {
 #[derive(Resource, Default)]
 struct TeamAssignments(std::collections::HashMap<PeerId, Team>);
 
+/// The authoritative store of deposited resources per player. Lives outside
+/// the ship entity so it survives death (DESIGN §3: deposited resources are
+/// never lost); mirrored onto each ship's `Bank` component for replication.
+#[derive(Resource, Default)]
+pub struct Banks(pub std::collections::HashMap<PeerId, u32>);
+
 impl TeamAssignments {
     /// Existing assignment, or the team with fewer assigned players.
     fn assign(&mut self, client_id: PeerId) -> Team {
@@ -149,6 +155,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(ListenAddr(addr));
     app.init_resource::<TeamAssignments>();
+    app.init_resource::<Banks>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     app.add_systems(
@@ -157,6 +164,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
             hit_detection,
             asteroid_hit_detection,
             scoop_fragments,
+            deposit_cargo,
             respawn_ships,
             log_ships,
         )
@@ -331,6 +339,36 @@ fn asteroid_hit_detection(
     }
 }
 
+/// Hovering inside a friendly dropoff's radius transfers ore from the hold
+/// into the player's bank, one unit per DEPOSIT_INTERVAL_TICKS: deposits are
+/// a deliberate, vulnerable pause rather than a drive-by (DESIGN §3).
+fn deposit_cargo(
+    timeline: Res<LocalTimeline>,
+    mut banks: ResMut<Banks>,
+    dropoffs: Query<(&Position, &Team), With<Mothership>>,
+    mut ships: Query<(&PlayerId, &Team, &Position, &mut CargoHold, &mut Bank)>,
+) {
+    if timeline.tick().0 % sim::DEPOSIT_INTERVAL_TICKS as u32 != 0 {
+        return;
+    }
+    for (player, team, position, mut hold, mut bank) in &mut ships {
+        if hold.current == 0 {
+            continue;
+        }
+        let at_dropoff = dropoffs.iter().any(|(dpos, dteam)| {
+            dteam == team
+                && dpos.0.distance_squared(position.0) < sim::DEPOSIT_RADIUS * sim::DEPOSIT_RADIUS
+        });
+        if !at_dropoff {
+            continue;
+        }
+        hold.current -= 1;
+        let total = banks.0.entry(player.0).or_insert(0);
+        *total += 1;
+        bank.0 = *total;
+    }
+}
+
 /// Flying over a fragment scoops it into the hold — if it fits. Full holds
 /// leave ore floating: go deposit.
 fn scoop_fragments(
@@ -361,19 +399,22 @@ fn handle_connected(
     trigger: On<Add, Connected>,
     query: Query<&RemoteId, With<ClientOf>>,
     mut teams: ResMut<TeamAssignments>,
+    banks: Res<Banks>,
     mut commands: Commands,
 ) {
     let Ok(client_id) = query.get(trigger.entity) else {
         return;
     };
     let team = teams.assign(client_id.0);
-    spawn_ship(&mut commands, client_id.0, team, trigger.entity);
+    let bank = banks.0.get(&client_id.0).copied().unwrap_or(0);
+    spawn_ship(&mut commands, client_id.0, team, bank, trigger.entity);
 }
 
-fn spawn_ship(commands: &mut Commands, client_id: PeerId, team: Team, link: Entity) {
+fn spawn_ship(commands: &mut Commands, client_id: PeerId, team: Team, bank: u32, link: Entity) {
     let entity = commands
         .spawn((
             sim::ship_bundle(client_id, team),
+            Bank(bank),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
             PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
@@ -417,7 +458,15 @@ fn hit_detection(
     timeline: Res<LocalTimeline>,
     bullets: Query<(Entity, &Position, &LinearVelocity, &BulletMarker)>,
     shooters: Query<(&PlayerId, &Team, &ControlledBy)>,
-    mut targets: Query<(Entity, &PlayerId, &Team, &ShipPoseHistory, &mut Health)>,
+    mut targets: Query<(
+        Entity,
+        &PlayerId,
+        &Team,
+        &Position,
+        &ShipPoseHistory,
+        Option<&CargoHold>,
+        &mut Health,
+    )>,
     delays: Query<&InterpolationDelay, With<ClientOf>>,
 ) {
     let tick = timeline.tick();
@@ -441,20 +490,23 @@ fn hit_detection(
         let seg_end = position.0 + velocity.0 * sim::TICK_DT;
 
         // No friendly fire: bullets only connect with the other team.
-        let hit_target = targets.iter().find_map(|(entity, id, team, history, _)| {
-            if id.0 == marker.owner || *team == shooter_team {
-                return None;
-            }
-            let center = history.sample(rewind_tick, overstep)?;
-            segment_hits_circle(seg_start, seg_end, center, SHIP_HIT_RADIUS + sim::BULLET_SIZE)
-                .then_some(entity)
-        });
+        let hit_target = targets
+            .iter()
+            .find_map(|(entity, id, team, _, history, _, _)| {
+                if id.0 == marker.owner || *team == shooter_team {
+                    return None;
+                }
+                let center = history.sample(rewind_tick, overstep)?;
+                segment_hits_circle(seg_start, seg_end, center, SHIP_HIT_RADIUS + sim::BULLET_SIZE)
+                    .then_some(entity)
+            });
         let Some(target) = hit_target else {
             continue;
         };
 
         commands.entity(bullet_entity).try_despawn();
-        let Ok((_, target_id, _, _, mut health)) = targets.get_mut(target) else {
+        let Ok((_, target_id, _, target_pos, _, cargo, mut health)) = targets.get_mut(target)
+        else {
             continue;
         };
         let target_id = target_id.0;
@@ -472,6 +524,23 @@ fn hit_detection(
                 continue;
             };
             info!("Kill: {:?} destroyed {:?}", marker.owner, target_id);
+            // Undeposited ore scatters as scoopable fragments — recoverable
+            // by the victim's team, or stolen by the killer's (DESIGN §3).
+            let dropped = cargo.map_or(0, |hold| hold.current);
+            let position = target_pos.0;
+            for i in 0..dropped {
+                let angle = i as f32 / dropped.max(1) as f32 * core::f32::consts::TAU;
+                let dir = Vec2::from_angle(angle);
+                commands.spawn((
+                    sim::fragment_bundle(
+                        position + dir * 20.0,
+                        dir * sim::FRAGMENT_SPEED * 0.7,
+                        tick,
+                    ),
+                    Replicate::to_clients(NetworkTarget::All),
+                    InterpolationTarget::to_clients(NetworkTarget::All),
+                ));
+            }
             commands.entity(target).try_despawn();
             commands.spawn(RespawnTask {
                 client_id: target_id,
@@ -487,6 +556,7 @@ fn respawn_ships(
     mut tasks: Query<(Entity, &mut RespawnTask)>,
     links: Query<(), With<ClientOf>>,
     mut teams: ResMut<TeamAssignments>,
+    banks: Res<Banks>,
 ) {
     for (entity, mut task) in &mut tasks {
         task.ticks_remaining -= 1;
@@ -498,7 +568,8 @@ fn respawn_ships(
         if links.get(task.link).is_ok() {
             info!("Respawning ship for {:?}", task.client_id);
             let team = teams.assign(task.client_id);
-            spawn_ship(&mut commands, task.client_id, team, task.link);
+            let bank = banks.0.get(&task.client_id).copied().unwrap_or(0);
+            spawn_ship(&mut commands, task.client_id, team, bank, task.link);
         }
     }
 }

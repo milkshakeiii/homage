@@ -70,6 +70,11 @@ pub const BOUNDARY_PUSH: f32 = 900.0; // units/s^2 at full depth
 
 pub const MOTHERSHIP_RADIUS: f32 = 120.0;
 pub const MOTHERSHIP_HEALTH: u16 = 1000;
+/// Ship-to-dropoff distance that counts as depositing (lenient: guidepost 5).
+pub const DEPOSIT_RADIUS: f32 = MOTHERSHIP_RADIUS + 130.0;
+/// One ore unit transfers per this many ticks — a full fighter hold takes
+/// ~1s of hovering, so depositing is a deliberate, vulnerable moment.
+pub const DEPOSIT_INTERVAL_TICKS: u16 = 12;
 /// Ships take spawn on a ring around their mothership.
 pub const SPAWN_RING_RADIUS: f32 = MOTHERSHIP_RADIUS + 120.0;
 

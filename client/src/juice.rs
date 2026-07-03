@@ -51,6 +51,7 @@ impl Plugin for JuicePlugin {
                 (detect_kills, cache_ship_positions).chain(),
                 detect_damage,
                 detect_own_fire,
+                detect_deposit,
                 ensure_trails,
                 decay_shake,
             ),
@@ -64,6 +65,7 @@ impl Plugin for JuicePlugin {
                 (update_trails, draw_trails).chain(),
                 draw_thrust_flare,
                 draw_kill_rings,
+                draw_deposit_beam,
                 camera_follow.before(TransformSystems::Propagate),
             )
                 .after(FrameInterpolationSystems::Interpolate),
@@ -373,6 +375,56 @@ fn draw_kill_rings(mut gizmos: Gizmos, mut rings: ResMut<KillRings>, time: Res<T
     }
 }
 
+/// While the local ship is depositing (in a friendly dropoff radius with ore
+/// aboard), draw a shimmering transfer beam to the dropoff.
+fn draw_deposit_beam(
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+    ship: Query<
+        (&Position, &Team, &CargoHold),
+        (With<Predicted>, With<InputMarker<Inputs>>),
+    >,
+    dropoffs: Query<(&Position, &Team), With<Mothership>>,
+) {
+    let Ok((ship_pos, ship_team, cargo)) = ship.single() else {
+        return;
+    };
+    if cargo.current == 0 {
+        return;
+    }
+    for (dropoff_pos, dropoff_team) in &dropoffs {
+        if dropoff_team != ship_team
+            || dropoff_pos.0.distance(ship_pos.0) > sim::DEPOSIT_RADIUS
+        {
+            continue;
+        }
+        let wobble = (time.elapsed_secs() * 20.0).sin() * 3.0;
+        let dir = (dropoff_pos.0 - ship_pos.0).normalize_or_zero();
+        let mid = ship_pos.0.lerp(dropoff_pos.0, 0.5) + dir.perp() * wobble;
+        let color = Color::srgb(1.0, 0.85, 0.3).with_alpha(0.7);
+        gizmos.linestrip_2d([ship_pos.0, mid, dropoff_pos.0], color);
+    }
+}
+
+/// A soft chime every time the local bank ticks up.
+fn detect_deposit(
+    mut commands: Commands,
+    mut last_bank: Local<Option<u32>>,
+    ship: Query<&Bank, (With<Predicted>, With<InputMarker<Inputs>>)>,
+    sfx: Option<Res<Sfx>>,
+) {
+    let Ok(bank) = ship.single() else {
+        *last_bank = None;
+        return;
+    };
+    if last_bank.is_some_and(|previous| bank.0 > previous) {
+        if let Some(sfx) = &sfx {
+            play(&mut commands, &sfx.chime, 0.3);
+        }
+    }
+    *last_bank = Some(bank.0);
+}
+
 // SFX (synthesized placeholders — no asset files)
 
 #[derive(Resource)]
@@ -380,6 +432,7 @@ struct Sfx {
     fire: Handle<AudioSource>,
     hit: Handle<AudioSource>,
     kill: Handle<AudioSource>,
+    chime: Handle<AudioSource>,
 }
 
 fn play(commands: &mut Commands, handle: &Handle<AudioSource>, volume: f32) {
@@ -422,7 +475,22 @@ fn setup_sfx(mut commands: Commands, mut audio: ResMut<Assets<AudioSource>>) {
         fire: add(synth_fire()),
         hit: add(synth_hit()),
         kill: add(synth_kill()),
+        chime: add(synth_chime()),
     });
+}
+
+/// Deposit chime: two quick rising sine notes.
+fn synth_chime() -> Vec<f32> {
+    let n = (SAMPLE_RATE as f32 * 0.12) as usize;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            let freq = if t < 0.5 { 660.0 } else { 880.0 };
+            let s = (i as f32 / SAMPLE_RATE as f32 * freq * core::f32::consts::TAU).sin();
+            let env = ((t * 2.0) % 1.0 * -5.0).exp();
+            s * env * 0.6
+        })
+        .collect()
 }
 
 /// Laser pew: square-ish sweep 700→350 Hz over 60 ms with exponential decay.

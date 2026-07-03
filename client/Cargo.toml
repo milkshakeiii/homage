@@ -12,5 +12,8 @@ bevy = { workspace = true, features = [
   "bevy_state",
   "bevy_audio",
   "wav",
+  "bevy_ui",
+  "bevy_text",
+  "default_font",
 ] }
 lightyear = { workspace = true }
