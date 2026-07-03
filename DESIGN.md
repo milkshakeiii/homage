@@ -291,10 +291,11 @@ holding map features.
   hit flash, kill rings, capped shake); placeholder synth SFX; fixed client
   prediction to actually simulate locally (smooth flight, same-frame input
   response). Exit bar met: Henry flew it.
-- **M1 — economy loop:** teams; mothership as structure + dropoff; asteroids
-  that crack into scoopable fragments; cargo with mass penalty; deposit;
-  personal resource bank; cargo drop on death. Harvester handling-under-load
-  must clear the feel bar.
+- **M1 — economy loop (done):** teams; mothership as structure + dropoff;
+  asteroids that crack into scoopable fragments; cargo with mass penalty;
+  deposit; personal resource bank; cargo drop on death. All covered by e2e
+  tests. (Harvester handling-under-load re-checks when the harvester hull
+  lands in M2.)
 - **M2 — construction & spawning:** hull purchase; distinct hull stats;
   Gunship archetype (corvette); Captain archetype (resource controller,
   strike carrier); spawn-point selection; facility stocking + refit radius;
