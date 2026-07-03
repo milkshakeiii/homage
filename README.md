@@ -38,7 +38,7 @@ fleet and flies it better.
 
 ## Development
 
-The workspace has three crates:
+The workspace has four crates:
 
 - `shared` — the network protocol (replicated components, inputs), the avian2d
   physics setup, and the ship/bullet simulation, which runs identically on
@@ -48,6 +48,9 @@ The workspace has three crates:
   the shooter saw when validating hits.
 - `client` — windowed client (`cargo run -p homage_client -- <client_id>`).
   Add `bot` as a second argument for a self-driving client.
+- `e2e` — headless integration tests (`cargo test -p homage_e2e`): a real
+  server and real clients in one process over loopback UDP, time-stepped
+  manually so full gameplay scenarios verify in under a second.
 
 ### Running locally
 

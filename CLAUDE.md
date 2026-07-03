@@ -17,6 +17,10 @@ needs Henry's input.
 - `client` — windowed client, gizmo-only rendering. `cargo run -p
   homage_client -- <id>` (unique id per client), append `bot` for a
   self-driving client.
+- `e2e` — the headless integration-test harness (`TestNet`): one real server
+  App plus N real client Apps in one process over loopback UDP, time-stepped
+  manually (one tick per `update()`), so a connect→shoot→kill→respawn cycle
+  runs in well under a second.
 
 ## Build / run / test
 
@@ -27,10 +31,16 @@ cargo run -p homage_client -- 1  # separate terminal, unique id per client
 cargo test --workspace           # includes headless client+server integration tests
 ```
 
-Integration tests live in `server/tests/` and spin up a real server App plus
-real client Apps in one process, connected over UDP on loopback with per-test
-ports. Every gameplay feature should land with an end-to-end test there
-("harvester deposits → bank increments"), not just unit tests.
+Integration tests live in `e2e/tests/` on top of the `TestNet` harness in
+`e2e/src/lib.rs`; each test uses a unique loopback port (tests run in
+parallel). Every gameplay feature should land with an end-to-end test there
+("harvester deposits → bank increments"), not just unit tests. Set
+`TEST_LOG=1` for server logs while debugging a test.
+
+Gotcha: `cargo run -p <crate>` unifies features per-package, not
+per-workspace, so it may rebuild bevy after a `--workspace` build. Prefer
+`cargo build --workspace` first, and expect the first `cargo run` after
+adding a crate to be slow.
 
 ## Conventions & gotchas
 
