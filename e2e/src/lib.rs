@@ -127,6 +127,23 @@ impl TestNet {
         query.iter(world).count()
     }
 
+    /// Which team the server put a client's ship on.
+    pub fn server_ship_team(&mut self, client_id: u64) -> Option<Team> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &Team)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, team)| *team)
+    }
+
+    /// Motherships visible to a client: (team, position).
+    pub fn client_motherships(&mut self, client_idx: usize) -> Vec<(Team, Vec2)> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query_filtered::<(&Team, &Position), With<Mothership>>();
+        query.iter(world).map(|(team, pos)| (*team, pos.0)).collect()
+    }
+
     /// The server's current view of a client's input (for diagnosing input
     /// transmission in tests).
     pub fn server_input(&mut self, client_id: u64) -> Option<ShipInput> {

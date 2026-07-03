@@ -67,6 +67,25 @@ struct RespawnTask {
     ticks_remaining: i32,
 }
 
+/// Which team each known player is on. Assignments persist through death and
+/// disconnect, so rejoining players keep their side.
+#[derive(Resource, Default)]
+struct TeamAssignments(std::collections::HashMap<PeerId, Team>);
+
+impl TeamAssignments {
+    /// Existing assignment, or the team with fewer assigned players.
+    fn assign(&mut self, client_id: PeerId) -> Team {
+        if let Some(team) = self.0.get(&client_id) {
+            return *team;
+        }
+        let blue = self.0.values().filter(|t| **t == Team::Blue).count();
+        let red = self.0.len() - blue;
+        let team = if blue <= red { Team::Blue } else { Team::Red };
+        self.0.insert(client_id, team);
+        team
+    }
+}
+
 /// Address the server should listen on; read by the startup system.
 #[derive(Resource)]
 struct ListenAddr(SocketAddr);
@@ -95,7 +114,8 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.add_plugins(SharedPlugin);
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(ListenAddr(addr));
-    app.add_systems(Startup, start_server);
+    app.init_resource::<TeamAssignments>();
+    app.add_systems(Startup, (start_server, spawn_motherships));
     app.add_systems(FixedUpdate, (hit_detection, respawn_ships, log_ships).chain());
     // Record ship positions after physics has moved them, so the history
     // matches what gets replicated (and therefore what shooters see).
@@ -133,22 +153,38 @@ fn handle_new_client(trigger: On<Add, LinkOf>, mut commands: Commands) {
         .insert((ReplicationSender, Name::from("ClientLink")));
 }
 
-/// Once a client is confirmed as connected, spawn its ship.
+/// Each team's mothership, replicated to everyone. No InterpolationTarget:
+/// interpolation only applies values once it has two updates to blend, and a
+/// static structure never updates after spawn — clients read the confirmed
+/// entity directly.
+fn spawn_motherships(mut commands: Commands) {
+    for team in [Team::Blue, Team::Red] {
+        commands.spawn((
+            sim::mothership_bundle(team),
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+    }
+}
+
+/// Once a client is confirmed as connected, put it on the smaller team and
+/// spawn its ship.
 fn handle_connected(
     trigger: On<Add, Connected>,
     query: Query<&RemoteId, With<ClientOf>>,
+    mut teams: ResMut<TeamAssignments>,
     mut commands: Commands,
 ) {
     let Ok(client_id) = query.get(trigger.entity) else {
         return;
     };
-    spawn_ship(&mut commands, client_id.0, trigger.entity);
+    let team = teams.assign(client_id.0);
+    spawn_ship(&mut commands, client_id.0, team, trigger.entity);
 }
 
-fn spawn_ship(commands: &mut Commands, client_id: PeerId, link: Entity) {
+fn spawn_ship(commands: &mut Commands, client_id: PeerId, team: Team, link: Entity) {
     let entity = commands
         .spawn((
-            sim::ship_bundle(client_id),
+            sim::ship_bundle(client_id, team),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
             PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
@@ -159,7 +195,7 @@ fn spawn_ship(commands: &mut Commands, client_id: PeerId, link: Entity) {
             },
         ))
         .id();
-    info!("Spawned ship {entity:?} for client {client_id:?}");
+    info!("Spawned ship {entity:?} for client {client_id:?} on {team:?}");
 }
 
 fn record_pose_history(
@@ -191,17 +227,17 @@ fn hit_detection(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
     bullets: Query<(Entity, &Position, &LinearVelocity, &BulletMarker)>,
-    shooters: Query<(&PlayerId, &ControlledBy)>,
-    mut targets: Query<(Entity, &PlayerId, &ShipPoseHistory, &mut Health)>,
+    shooters: Query<(&PlayerId, &Team, &ControlledBy)>,
+    mut targets: Query<(Entity, &PlayerId, &Team, &ShipPoseHistory, &mut Health)>,
     delays: Query<&InterpolationDelay, With<ClientOf>>,
 ) {
     let tick = timeline.tick();
     for (bullet_entity, position, velocity, marker) in &bullets {
         // Rewind by the *shooter's* interpolation delay (sent with inputs).
-        let Some(link) = shooters
+        let Some((shooter_team, link)) = shooters
             .iter()
-            .find(|(id, _)| id.0 == marker.owner)
-            .map(|(_, controlled_by)| controlled_by.owner)
+            .find(|(id, _, _)| id.0 == marker.owner)
+            .map(|(_, team, controlled_by)| (*team, controlled_by.owner))
         else {
             // Shooter's ship is gone (died with bullets in flight): without
             // their delay we can't rewind fairly, so the bullet just flies on.
@@ -215,8 +251,9 @@ fn hit_detection(
         let seg_start = position.0;
         let seg_end = position.0 + velocity.0 * sim::TICK_DT;
 
-        let hit_target = targets.iter().find_map(|(entity, id, history, _)| {
-            if id.0 == marker.owner {
+        // No friendly fire: bullets only connect with the other team.
+        let hit_target = targets.iter().find_map(|(entity, id, team, history, _)| {
+            if id.0 == marker.owner || *team == shooter_team {
                 return None;
             }
             let center = history.sample(rewind_tick, overstep)?;
@@ -228,7 +265,7 @@ fn hit_detection(
         };
 
         commands.entity(bullet_entity).try_despawn();
-        let Ok((_, target_id, _, mut health)) = targets.get_mut(target) else {
+        let Ok((_, target_id, _, _, mut health)) = targets.get_mut(target) else {
             continue;
         };
         let target_id = target_id.0;
@@ -240,8 +277,8 @@ fn hit_detection(
         if health.current == 0 {
             let Some(link) = shooters
                 .iter()
-                .find(|(id, _)| id.0 == target_id)
-                .map(|(_, controlled_by)| controlled_by.owner)
+                .find(|(id, _, _)| id.0 == target_id)
+                .map(|(_, _, controlled_by)| controlled_by.owner)
             else {
                 continue;
             };
@@ -260,6 +297,7 @@ fn respawn_ships(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut RespawnTask)>,
     links: Query<(), With<ClientOf>>,
+    mut teams: ResMut<TeamAssignments>,
 ) {
     for (entity, mut task) in &mut tasks {
         task.ticks_remaining -= 1;
@@ -270,7 +308,8 @@ fn respawn_ships(
         // Skip the respawn if the client disconnected while dead.
         if links.get(task.link).is_ok() {
             info!("Respawning ship for {:?}", task.client_id);
-            spawn_ship(&mut commands, task.client_id, task.link);
+            let team = teams.assign(task.client_id);
+            spawn_ship(&mut commands, task.client_id, team, task.link);
         }
     }
 }

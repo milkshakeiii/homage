@@ -13,6 +13,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerId(pub PeerId);
 
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Team {
+    Blue,
+    Red,
+}
+
+impl Team {
+    pub fn opponent(self) -> Team {
+        match self {
+            Team::Blue => Team::Red,
+            Team::Red => Team::Blue,
+        }
+    }
+}
+
+/// The team's central structure: only place carrier-type hulls are built,
+/// default resource dropoff, and (eventually) the win condition.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Mothership;
+
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct PlayerColor(pub Color);
 
@@ -67,9 +87,15 @@ pub struct BulletLifetime {
     pub lifetime_ticks: i32,
 }
 
-pub fn color_from_id(client_id: PeerId) -> Color {
-    let hue = ((client_id.to_bits().wrapping_mul(30)) % 360) as f32;
-    Color::hsl(hue, 0.8, 0.5)
+/// Per-player color within the team's hue band: friend-or-foe is readable at
+/// a glance, individuals still distinguishable.
+pub fn color_from_id(client_id: PeerId, team: Team) -> Color {
+    let base = match team {
+        Team::Blue => 210.0,
+        Team::Red => 350.0,
+    };
+    let spread = ((client_id.to_bits().wrapping_mul(47)) % 80) as f32 - 40.0;
+    Color::hsl((base + spread).rem_euclid(360.0), 0.8, 0.55)
 }
 
 // Inputs
@@ -143,6 +169,8 @@ impl Plugin for ProtocolPlugin {
 
         app.component::<Name>().replicate();
         app.component::<PlayerId>().replicate();
+        app.component::<Team>().replicate();
+        app.component::<Mothership>().replicate();
         app.component::<PlayerColor>().replicate();
         app.component::<Health>().replicate();
         app.component::<BulletMarker>().replicate();

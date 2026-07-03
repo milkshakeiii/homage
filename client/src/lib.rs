@@ -154,6 +154,9 @@ pub fn build_client_app(config: ClientConfig) -> App {
     // interpolation owns their pose. Ship-ship contact prediction is a
     // known gap for later.)
     app.add_systems(Update, add_predicted_ship_physics);
+    // Static structures get client-side colliders so the predicted ship
+    // bounces off them locally instead of waiting for a server correction.
+    app.add_systems(Update, add_structure_colliders);
 
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
@@ -161,7 +164,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
         app.add_systems(Update, accumulate_taps);
         app.add_systems(
             PostUpdate,
-            (draw_grid, draw_ships, draw_bullets)
+            (draw_grid, draw_ships, draw_bullets, draw_motherships)
                 .after(FrameInterpolationSystems::Interpolate),
         );
         // HOMAGE_MOTION_DEBUG=1: log the per-frame movement of the ship as
@@ -226,6 +229,21 @@ fn add_predicted_ship_physics(
 ) {
     for entity in &ships {
         commands.entity(entity).try_insert(sim::ship_physics());
+    }
+}
+
+fn add_structure_colliders(
+    structures: Query<
+        Entity,
+        (With<Mothership>, Without<avian2d::prelude::RigidBody>),
+    >,
+    mut commands: Commands,
+) {
+    for entity in &structures {
+        commands.entity(entity).try_insert((
+            avian2d::prelude::RigidBody::Static,
+            avian2d::prelude::Collider::circle(sim::MOTHERSHIP_RADIUS),
+        ));
     }
 }
 
@@ -409,23 +427,59 @@ fn draw_bullets(
     }
 }
 
-/// A faint grid so motion is visible against empty space.
+/// Each team's mothership: a big team-colored hull ring with an inner core,
+/// plus a health bar once it becomes damageable.
+fn draw_motherships(
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+    motherships: Query<(&Position, &Team), With<Mothership>>,
+) {
+    for (position, team) in &motherships {
+        let color = team_color(*team);
+        let pos = position.0;
+        gizmos.circle_2d(Isometry2d::from_translation(pos), sim::MOTHERSHIP_RADIUS, color);
+        gizmos.circle_2d(
+            Isometry2d::from_translation(pos),
+            sim::MOTHERSHIP_RADIUS * 0.55,
+            color.with_alpha(0.6),
+        );
+        // Slowly rotating docking spokes, so the structure reads as alive.
+        let spin = time.elapsed_secs() * 0.2;
+        for i in 0..3 {
+            let angle = spin + i as f32 * core::f32::consts::TAU / 3.0;
+            let dir = Vec2::from_angle(angle);
+            gizmos.line_2d(
+                pos + dir * sim::MOTHERSHIP_RADIUS * 0.55,
+                pos + dir * sim::MOTHERSHIP_RADIUS,
+                color.with_alpha(0.4),
+            );
+        }
+    }
+}
+
+fn team_color(team: Team) -> Color {
+    match team {
+        Team::Blue => Color::srgb(0.35, 0.55, 1.0),
+        Team::Red => Color::srgb(1.0, 0.35, 0.35),
+    }
+}
+
+/// A faint grid over the play area so motion is visible against empty space,
+/// plus the soft-boundary rectangle.
 fn draw_grid(mut gizmos: Gizmos) {
     let color = Color::srgba(1.0, 1.0, 1.0, 0.08);
-    let extent = 2000.0;
-    let step = 200.0;
-    let n = (extent / step) as i32;
-    for i in -n..=n {
-        let offset = i as f32 * step;
-        gizmos.line_2d(
-            Vec2::new(offset, -extent),
-            Vec2::new(offset, extent),
-            color,
-        );
-        gizmos.line_2d(
-            Vec2::new(-extent, offset),
-            Vec2::new(extent, offset),
-            color,
-        );
+    let step = 400.0;
+    let (w, h) = (sim::MAP_HALF_WIDTH, sim::MAP_HALF_HEIGHT);
+    let nx = (w / step) as i32;
+    let ny = (h / step) as i32;
+    for i in -nx..=nx {
+        let x = i as f32 * step;
+        gizmos.line_2d(Vec2::new(x, -h), Vec2::new(x, h), color);
     }
+    for i in -ny..=ny {
+        let y = i as f32 * step;
+        gizmos.line_2d(Vec2::new(-w, y), Vec2::new(w, y), color);
+    }
+    let boundary = Color::srgba(1.0, 0.4, 0.3, 0.35);
+    gizmos.rect_2d(Isometry2d::IDENTITY, Vec2::new(w * 2.0, h * 2.0), boundary);
 }

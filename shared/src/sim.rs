@@ -34,8 +34,26 @@ pub const FIRE_COOLDOWN_TICKS: u16 = 16; // 4 shots/s
 /// How long a fire press stays buffered waiting for the cooldown (125ms).
 pub const FIRE_BUFFER_TICKS: i32 = 8;
 
-pub const SPAWN_RING_RADIUS: f32 = 200.0;
 pub const RESPAWN_DELAY_TICKS: i32 = 192; // 3s at 64Hz
+
+// Map (DESIGN §8): symmetric bounded arena, motherships at opposite ends.
+pub const MAP_HALF_WIDTH: f32 = 6000.0;
+pub const MAP_HALF_HEIGHT: f32 = 4000.0;
+/// Depth over which the soft boundary ramps to full strength.
+pub const BOUNDARY_MARGIN: f32 = 300.0;
+pub const BOUNDARY_PUSH: f32 = 900.0; // units/s^2 at full depth
+
+pub const MOTHERSHIP_RADIUS: f32 = 120.0;
+pub const MOTHERSHIP_HEALTH: u16 = 1000;
+/// Ships take spawn on a ring around their mothership.
+pub const SPAWN_RING_RADIUS: f32 = MOTHERSHIP_RADIUS + 120.0;
+
+pub fn team_anchor(team: Team) -> Vec2 {
+    match team {
+        Team::Blue => Vec2::new(-(MAP_HALF_WIDTH - 800.0), 0.0),
+        Team::Red => Vec2::new(MAP_HALF_WIDTH - 800.0, 0.0),
+    }
+}
 
 /// Ships face +X at zero rotation.
 fn ship_collider() -> Collider {
@@ -61,28 +79,47 @@ pub fn ship_physics() -> impl Bundle {
     )
 }
 
-/// Deterministic spawn spot: spread around a ring, facing outward.
-pub fn spawn_pose(client_id: PeerId) -> (Position, Rotation) {
+/// Deterministic spawn spot: a ring around the team's mothership, facing the
+/// enemy's side of the map.
+pub fn spawn_pose(client_id: PeerId, team: Team) -> (Position, Rotation) {
     let angle = (client_id.to_bits() % 16) as f32 / 16.0 * TAU;
-    (
-        Position(Vec2::from_angle(angle) * SPAWN_RING_RADIUS),
-        Rotation::radians(angle),
-    )
+    let position = team_anchor(team) + Vec2::from_angle(angle) * SPAWN_RING_RADIUS;
+    let facing = match team {
+        Team::Blue => 0.0,
+        Team::Red => core::f32::consts::PI,
+    };
+    (Position(position), Rotation::radians(facing))
 }
 
 /// Everything a ship needs on the server; replication/prediction targets are
 /// added separately by the server.
-pub fn ship_bundle(client_id: PeerId) -> impl Bundle {
-    let (position, rotation) = spawn_pose(client_id);
+pub fn ship_bundle(client_id: PeerId, team: Team) -> impl Bundle {
+    let (position, rotation) = spawn_pose(client_id, team);
     (
         PlayerId(client_id),
-        PlayerColor(color_from_id(client_id)),
+        team,
+        PlayerColor(color_from_id(client_id, team)),
         Health::new(SHIP_HEALTH),
         Weapon::new(FIRE_COOLDOWN_TICKS, BULLET_SPEED),
         position,
         rotation,
         ship_physics(),
         Name::from("Ship"),
+    )
+}
+
+/// The server-side mothership: an unpiloted team structure (DESIGN §2) —
+/// dropoff and build site. Not damageable yet (win condition is M4).
+pub fn mothership_bundle(team: Team) -> impl Bundle {
+    (
+        Mothership,
+        team,
+        Health::new(MOTHERSHIP_HEALTH),
+        Position(team_anchor(team)),
+        Rotation::default(),
+        RigidBody::Static,
+        Collider::circle(MOTHERSHIP_RADIUS),
+        Name::from("Mothership"),
     )
 }
 
@@ -153,6 +190,23 @@ pub fn clamp_ship_speed(mut query: Query<&mut LinearVelocity, With<PlayerId>>) {
     for mut velocity in &mut query {
         if velocity.0.length_squared() > MAX_SPEED * MAX_SPEED {
             velocity.0 = velocity.0.normalize() * MAX_SPEED;
+        }
+    }
+}
+
+/// Soft map boundary (DESIGN §8): a push-back force that ramps up over
+/// `BOUNDARY_MARGIN` outside the play area instead of a hard wall. Runs in
+/// the shared sim so the predicted ship feels it with zero latency.
+pub fn soft_boundary(mut query: Query<(&Position, &mut LinearVelocity), With<PlayerId>>) {
+    for (position, mut velocity) in &mut query {
+        let p = position.0;
+        let overshoot = Vec2::new(
+            (p.x.abs() - MAP_HALF_WIDTH).max(0.0) * -p.x.signum(),
+            (p.y.abs() - MAP_HALF_HEIGHT).max(0.0) * -p.y.signum(),
+        );
+        if overshoot != Vec2::ZERO {
+            let strength = (overshoot.length() / BOUNDARY_MARGIN).min(1.0);
+            velocity.0 += overshoot.normalize() * BOUNDARY_PUSH * strength * TICK_DT;
         }
     }
 }
