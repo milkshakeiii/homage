@@ -90,6 +90,40 @@ impl TeamAssignments {
 #[derive(Resource)]
 struct ListenAddr(SocketAddr);
 
+/// Asteroid field layout. Tests disable it (`enabled: false`) and spawn
+/// precisely-placed rocks instead.
+#[derive(Resource)]
+pub struct AsteroidFieldConfig {
+    pub enabled: bool,
+    pub seed: u64,
+}
+
+impl Default for AsteroidFieldConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            seed: 0xA57E_401D,
+        }
+    }
+}
+
+/// Tiny deterministic PRNG for world generation (no external rand dep).
+struct Lcg(u64);
+
+impl Lcg {
+    fn next_f32(&mut self) -> f32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    fn range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + self.next_f32() * (hi - lo)
+    }
+}
+
 /// Build the full server app, listening on `addr`. The binary adds a
 /// LogPlugin and calls `run()`; tests drive the returned app with manual
 /// `update()` calls instead.
@@ -115,8 +149,19 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.insert_resource(ReplicationMetadata::new(SEND_INTERVAL));
     app.insert_resource(ListenAddr(addr));
     app.init_resource::<TeamAssignments>();
-    app.add_systems(Startup, (start_server, spawn_motherships));
-    app.add_systems(FixedUpdate, (hit_detection, respawn_ships, log_ships).chain());
+    app.init_resource::<AsteroidFieldConfig>();
+    app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
+    app.add_systems(
+        FixedUpdate,
+        (
+            hit_detection,
+            asteroid_hit_detection,
+            scoop_fragments,
+            respawn_ships,
+            log_ships,
+        )
+            .chain(),
+    );
     // Record ship positions after physics has moved them, so the history
     // matches what gets replicated (and therefore what shooters see).
     app.add_systems(
@@ -163,6 +208,150 @@ fn spawn_motherships(mut commands: Commands) {
             sim::mothership_bundle(team),
             Replicate::to_clients(NetworkTarget::All),
         ));
+    }
+}
+
+/// Generate the asteroid field (DESIGN §8): a dense contested belt in the
+/// middle, plus a safer thin belt near each mothership for bootstrap
+/// harvesting. Deterministic from the config seed.
+fn spawn_asteroid_field(config: Res<AsteroidFieldConfig>, mut commands: Commands) {
+    if !config.enabled {
+        return;
+    }
+    let mut rng = Lcg(config.seed);
+    let mut placed: Vec<(Vec2, f32)> = Vec::new();
+
+    let try_place = |placed: &mut Vec<(Vec2, f32)>, pos: Vec2, radius: f32| {
+        let clear = placed
+            .iter()
+            .all(|(p, r)| p.distance(pos) > (r + radius) * 1.6)
+            && [Team::Blue, Team::Red].iter().all(|t| {
+                sim::team_anchor(*t).distance(pos) > sim::SPAWN_RING_RADIUS + radius + 150.0
+            });
+        if clear {
+            placed.push((pos, radius));
+        }
+        clear
+    };
+
+    // Central contested belt.
+    let mut central = 0;
+    for _ in 0..400 {
+        if central >= 48 {
+            break;
+        }
+        let pos = Vec2::new(rng.range(-1800.0, 1800.0), rng.range(-3600.0, 3600.0));
+        let radius = rng.range(sim::ASTEROID_MIN_RADIUS, sim::ASTEROID_MAX_RADIUS);
+        if try_place(&mut placed, pos, radius) {
+            let seed = (rng.next_f32() * u16::MAX as f32) as u16;
+            commands.spawn((
+                sim::asteroid_bundle(pos, radius, seed),
+                Replicate::to_clients(NetworkTarget::All),
+            ));
+            central += 1;
+        }
+    }
+
+    // Home belts: a loose ring around each mothership, outside the spawn ring.
+    for team in [Team::Blue, Team::Red] {
+        let anchor = sim::team_anchor(team);
+        let mut home = 0;
+        for _ in 0..200 {
+            if home >= 10 {
+                break;
+            }
+            let angle = rng.range(0.0, core::f32::consts::TAU);
+            let dist = rng.range(700.0, 1400.0);
+            let pos = anchor + Vec2::from_angle(angle) * dist;
+            if pos.x.abs() > sim::MAP_HALF_WIDTH - 100.0
+                || pos.y.abs() > sim::MAP_HALF_HEIGHT - 100.0
+            {
+                continue;
+            }
+            let radius = rng.range(sim::ASTEROID_MIN_RADIUS, sim::ASTEROID_MAX_RADIUS * 0.7);
+            if try_place(&mut placed, pos, radius) {
+                let seed = (rng.next_f32() * u16::MAX as f32) as u16;
+                commands.spawn((
+                    sim::asteroid_bundle(pos, radius, seed),
+                    Replicate::to_clients(NetworkTarget::All),
+                ));
+                home += 1;
+            }
+        }
+    }
+    info!("Spawned {} asteroids", placed.len());
+}
+
+/// Bullets crack asteroids: swept segment vs the rock's circle (no lag
+/// compensation — the rocks don't move). A cracked asteroid ejects ore
+/// fragments in a deterministic fan.
+fn asteroid_hit_detection(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    bullets: Query<(Entity, &Position, &LinearVelocity), With<BulletMarker>>,
+    mut asteroids: Query<(Entity, &Position, &Asteroid, &mut Health)>,
+) {
+    let tick = timeline.tick();
+    for (bullet_entity, position, velocity, ..) in &bullets {
+        let seg_start = position.0;
+        let seg_end = position.0 + velocity.0 * sim::TICK_DT;
+        for (asteroid_entity, apos, asteroid, mut health) in &mut asteroids {
+            if !segment_hits_circle(
+                seg_start,
+                seg_end,
+                apos.0,
+                asteroid.radius * 0.9 + sim::BULLET_SIZE,
+            ) {
+                continue;
+            }
+            commands.entity(bullet_entity).try_despawn();
+            health.current = health.current.saturating_sub(1);
+            if health.current == 0 {
+                commands.entity(asteroid_entity).try_despawn();
+                let count = sim::asteroid_fragment_count(asteroid.radius);
+                for i in 0..count {
+                    let angle = i as f32 / count as f32 * core::f32::consts::TAU
+                        + asteroid.seed as f32;
+                    let dir = Vec2::from_angle(angle);
+                    let speed = sim::FRAGMENT_SPEED * (0.6 + 0.4 * ((i * 7 % 5) as f32 / 4.0));
+                    commands.spawn((
+                        sim::fragment_bundle(
+                            apos.0 + dir * asteroid.radius * 0.5,
+                            dir * speed,
+                            tick,
+                        ),
+                        Replicate::to_clients(NetworkTarget::All),
+                        InterpolationTarget::to_clients(NetworkTarget::All),
+                    ));
+                }
+                info!("Asteroid {asteroid_entity:?} cracked into {count} fragments");
+            }
+            break;
+        }
+    }
+}
+
+/// Flying over a fragment scoops it into the hold — if it fits. Full holds
+/// leave ore floating: go deposit.
+fn scoop_fragments(
+    mut commands: Commands,
+    fragments: Query<(Entity, &Position, &OreFragment)>,
+    mut ships: Query<(&Position, &mut CargoHold), With<PlayerId>>,
+) {
+    for (fragment_entity, fragment_pos, fragment) in &fragments {
+        for (ship_pos, mut hold) in &mut ships {
+            if ship_pos.0.distance_squared(fragment_pos.0)
+                > sim::SCOOP_RADIUS * sim::SCOOP_RADIUS
+            {
+                continue;
+            }
+            if hold.current + fragment.value > hold.capacity {
+                continue;
+            }
+            hold.current += fragment.value;
+            commands.entity(fragment_entity).try_despawn();
+            break;
+        }
     }
 }
 

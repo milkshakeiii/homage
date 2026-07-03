@@ -164,7 +164,14 @@ pub fn build_client_app(config: ClientConfig) -> App {
         app.add_systems(Update, accumulate_taps);
         app.add_systems(
             PostUpdate,
-            (draw_grid, draw_ships, draw_bullets, draw_motherships)
+            (
+                draw_grid,
+                draw_ships,
+                draw_bullets,
+                draw_motherships,
+                draw_asteroids,
+                draw_fragments,
+            )
                 .after(FrameInterpolationSystems::Interpolate),
         );
         // HOMAGE_MOTION_DEBUG=1: log the per-frame movement of the ship as
@@ -233,16 +240,26 @@ fn add_predicted_ship_physics(
 }
 
 fn add_structure_colliders(
-    structures: Query<
+    motherships: Query<
         Entity,
         (With<Mothership>, Without<avian2d::prelude::RigidBody>),
     >,
+    asteroids: Query<
+        (Entity, &Asteroid),
+        Without<avian2d::prelude::RigidBody>,
+    >,
     mut commands: Commands,
 ) {
-    for entity in &structures {
+    for entity in &motherships {
         commands.entity(entity).try_insert((
             avian2d::prelude::RigidBody::Static,
             avian2d::prelude::Collider::circle(sim::MOTHERSHIP_RADIUS),
+        ));
+    }
+    for (entity, asteroid) in &asteroids {
+        commands.entity(entity).try_insert((
+            avian2d::prelude::RigidBody::Static,
+            avian2d::prelude::Collider::circle(asteroid.radius * 0.9),
         ));
     }
 }
@@ -371,12 +388,13 @@ fn draw_ships(
             &Rotation,
             &PlayerColor,
             Option<&Health>,
+            Option<&CargoHold>,
             Option<&juice::FlashUntil>,
         ),
         (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
     >,
 ) {
-    for (position, rotation, color, health, flash) in &ships {
+    for (position, rotation, color, health, cargo, flash) in &ships {
         let flashing = flash.is_some_and(|f| time.elapsed_secs() < f.0);
         let draw_color = if flashing { Color::WHITE } else { color.0 };
         let pos = position.0;
@@ -402,6 +420,19 @@ fn draw_ships(
                 pos + Vec2::new(-half_width + sim::SHIP_LENGTH * fraction, y),
                 Color::srgb(0.2, 1.0, 0.2),
             );
+        }
+        // Ore aboard: an amber bar under the health bar.
+        if let Some(cargo) = cargo {
+            if cargo.current > 0 {
+                let fraction = cargo.load_fraction();
+                let half_width = sim::SHIP_LENGTH / 2.0;
+                let y = sim::SHIP_LENGTH / 2.0 + 4.0;
+                gizmos.line_2d(
+                    pos + Vec2::new(-half_width, y),
+                    pos + Vec2::new(-half_width + sim::SHIP_LENGTH * fraction, y),
+                    Color::srgb(1.0, 0.85, 0.3),
+                );
+            }
         }
     }
 }
@@ -461,6 +492,56 @@ fn team_color(team: Team) -> Color {
     match team {
         Team::Blue => Color::srgb(0.35, 0.55, 1.0),
         Team::Red => Color::srgb(1.0, 0.35, 0.35),
+    }
+}
+
+/// Rocks as irregular polygons, silhouette stable via the replicated seed;
+/// they darken as they take damage.
+fn draw_asteroids(
+    mut gizmos: Gizmos,
+    asteroids: Query<(&Position, &Asteroid, Option<&Health>)>,
+) {
+    for (position, asteroid, health) in &asteroids {
+        let damage = health.map_or(1.0, |h| h.current as f32 / h.max.max(1) as f32);
+        let shade = 0.35 + 0.25 * damage;
+        let color = Color::srgb(shade, shade * 0.95, shade * 0.85);
+        let n = 9;
+        let points: Vec<Vec2> = (0..=n)
+            .map(|i| {
+                let k = i % n;
+                // Cheap per-vertex hash off the replicated seed.
+                let h = (asteroid.seed as u32)
+                    .wrapping_mul(k as u32 + 13)
+                    .wrapping_mul(2654435761);
+                let wobble = 0.72 + 0.28 * ((h >> 16) & 0xff) as f32 / 255.0;
+                let angle = k as f32 / n as f32 * core::f32::consts::TAU;
+                position.0 + Vec2::from_angle(angle) * asteroid.radius * wobble
+            })
+            .collect();
+        gizmos.linestrip_2d(points, color);
+    }
+}
+
+/// Ore fragments: small pulsing diamonds you want to fly through.
+fn draw_fragments(
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+    fragments: Query<&Position, (With<OreFragment>, With<Interpolated>)>,
+) {
+    let pulse = 3.5 + (time.elapsed_secs() * 6.0).sin() * 0.8;
+    let color = Color::srgb(1.0, 0.85, 0.3);
+    for position in &fragments {
+        let p = position.0;
+        gizmos.linestrip_2d(
+            [
+                p + Vec2::new(0.0, pulse),
+                p + Vec2::new(pulse, 0.0),
+                p + Vec2::new(0.0, -pulse),
+                p + Vec2::new(-pulse, 0.0),
+                p + Vec2::new(0.0, pulse),
+            ],
+            color,
+        );
     }
 }
 

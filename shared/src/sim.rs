@@ -36,6 +36,31 @@ pub const FIRE_BUFFER_TICKS: i32 = 8;
 
 pub const RESPAWN_DELAY_TICKS: i32 = 192; // 3s at 64Hz
 
+// Economy (DESIGN §3).
+pub const ASTEROID_MIN_RADIUS: f32 = 28.0;
+pub const ASTEROID_MAX_RADIUS: f32 = 70.0;
+pub const FRAGMENT_VALUE: u16 = 1;
+pub const FRAGMENT_SPEED: f32 = 55.0;
+pub const FRAGMENT_TTL_TICKS: i32 = 3840; // 60s
+/// Ship-to-fragment distance that counts as a scoop.
+pub const SCOOP_RADIUS: f32 = 36.0;
+pub const FIGHTER_CARGO_CAPACITY: u16 = 5;
+/// Fraction of thrust lost at a full hold — hauling home is a piloting
+/// problem (DESIGN §3), and "one more rock" is a real gamble.
+pub const CARGO_ACCEL_PENALTY: f32 = 0.5;
+/// Fraction of max speed lost at a full hold.
+pub const CARGO_SPEED_PENALTY: f32 = 0.35;
+
+/// Asteroid durability scales gently with size.
+pub fn asteroid_health(radius: f32) -> u16 {
+    2 + (radius / 25.0) as u16
+}
+
+/// Fragments ejected when an asteroid cracks.
+pub fn asteroid_fragment_count(radius: f32) -> u16 {
+    ((radius / 8.0) as u16).clamp(4, 12)
+}
+
 // Map (DESIGN §8): symmetric bounded arena, motherships at opposite ends.
 pub const MAP_HALF_WIDTH: f32 = 6000.0;
 pub const MAP_HALF_HEIGHT: f32 = 4000.0;
@@ -101,6 +126,7 @@ pub fn ship_bundle(client_id: PeerId, team: Team) -> impl Bundle {
         PlayerColor(color_from_id(client_id, team)),
         Health::new(SHIP_HEALTH),
         Weapon::new(FIRE_COOLDOWN_TICKS, BULLET_SPEED),
+        CargoHold::empty(FIGHTER_CARGO_CAPACITY),
         position,
         rotation,
         ship_physics(),
@@ -120,6 +146,37 @@ pub fn mothership_bundle(team: Team) -> impl Bundle {
         RigidBody::Static,
         Collider::circle(MOTHERSHIP_RADIUS),
         Name::from("Mothership"),
+    )
+}
+
+/// A minable rock (server-side; static in M1).
+pub fn asteroid_bundle(position: Vec2, radius: f32, seed: u16) -> impl Bundle {
+    (
+        Asteroid { radius, seed },
+        Health::new(asteroid_health(radius)),
+        Position(position),
+        Rotation::default(),
+        RigidBody::Static,
+        Collider::circle(radius * 0.9),
+        Name::from("Asteroid"),
+    )
+}
+
+/// A drifting ore chunk (server-side). Kinematic: constant ballistic drift,
+/// scooped by proximity, no collisions.
+pub fn fragment_bundle(position: Vec2, velocity: Vec2, tick: Tick) -> impl Bundle {
+    (
+        OreFragment {
+            value: FRAGMENT_VALUE,
+        },
+        Position(position),
+        LinearVelocity(velocity),
+        RigidBody::Kinematic,
+        Expires {
+            origin_tick: tick,
+            lifetime_ticks: FRAGMENT_TTL_TICKS,
+        },
+        Name::from("Ore"),
     )
 }
 
@@ -151,14 +208,17 @@ pub fn player_movement(
             &Rotation,
             &mut LinearVelocity,
             &mut AngularVelocity,
+            Option<&CargoHold>,
         ),
         With<PlayerId>,
     >,
 ) {
-    for (action_state, rotation, mut linvel, mut angvel) in &mut query {
+    for (action_state, rotation, mut linvel, mut angvel, cargo) in &mut query {
         let input = &action_state.0 .0;
+        let load = cargo.map_or(0.0, CargoHold::load_fraction);
         if input.thrust {
-            linvel.0 += *rotation * Vec2::X * THRUST_ACCEL * TICK_DT;
+            let accel = THRUST_ACCEL * (1.0 - CARGO_ACCEL_PENALTY * load);
+            linvel.0 += *rotation * Vec2::X * accel * TICK_DT;
         }
         // Brake opposes the velocity vector regardless of facing: a recovery
         // tool (skill floor), while reversing by turn-and-thrust stays the
@@ -185,11 +245,15 @@ pub fn player_movement(
     }
 }
 
-/// Asteroids-style speed cap on top of damping.
-pub fn clamp_ship_speed(mut query: Query<&mut LinearVelocity, With<PlayerId>>) {
-    for mut velocity in &mut query {
-        if velocity.0.length_squared() > MAX_SPEED * MAX_SPEED {
-            velocity.0 = velocity.0.normalize() * MAX_SPEED;
+/// Asteroids-style speed cap on top of damping; a loaded hold lowers the cap.
+pub fn clamp_ship_speed(
+    mut query: Query<(&mut LinearVelocity, Option<&CargoHold>), With<PlayerId>>,
+) {
+    for (mut velocity, cargo) in &mut query {
+        let load = cargo.map_or(0.0, CargoHold::load_fraction);
+        let max = MAX_SPEED * (1.0 - CARGO_SPEED_PENALTY * load);
+        if velocity.0.length_squared() > max * max {
+            velocity.0 = velocity.0.normalize() * max;
         }
     }
 }
@@ -290,7 +354,7 @@ pub fn shared_player_firing(
                 RigidBody::Kinematic,
                 BulletMarker { owner: player_id.0 },
                 PlayerColor(color.0),
-                BulletLifetime {
+                Expires {
                     origin_tick: current_tick,
                     lifetime_ticks: BULLET_LIFETIME_TICKS,
                 },
@@ -313,7 +377,7 @@ pub fn shared_player_firing(
 /// Despawn bullets after their lifetime expires (both sides; the predicted
 /// copy despawns locally, the authoritative one despawns via replication).
 pub fn lifetime_despawner(
-    query: Query<(Entity, &BulletLifetime)>,
+    query: Query<(Entity, &Expires)>,
     timeline: Res<LocalTimeline>,
     mut commands: Commands,
 ) {

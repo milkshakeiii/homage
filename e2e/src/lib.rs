@@ -10,9 +10,10 @@ use bevy::time::TimeUpdateStrategy;
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 use core::time::Duration;
 use homage_client::{build_client_app, ClientConfig, InputOverride};
-use homage_server::build_server_app;
+use homage_server::{build_server_app, AsteroidFieldConfig};
 use homage_shared::protocol::*;
-use homage_shared::FIXED_TIMESTEP_HZ;
+use homage_shared::{sim, FIXED_TIMESTEP_HZ};
+use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 /// One simulation tick of virtual time.
@@ -32,6 +33,13 @@ impl TestNet {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
 
         let mut server = build_server_app(addr);
+        // No random asteroid field in tests: they teleport ships around and
+        // need empty, predictable space. Economy tests spawn precise rocks
+        // via `spawn_asteroid` / `spawn_fragment`.
+        server.insert_resource(AsteroidFieldConfig {
+            enabled: false,
+            seed: 0,
+        });
         if std::env::var("TEST_LOG").is_ok() {
             server.add_plugins(bevy::log::LogPlugin::default());
         }
@@ -125,6 +133,70 @@ impl TestNet {
         let world = self.server.world_mut();
         let mut query = world.query_filtered::<(), With<BulletMarker>>();
         query.iter(world).count()
+    }
+
+    /// Spawn a precisely-placed asteroid on the server (tests disable the
+    /// random field).
+    pub fn spawn_asteroid(&mut self, position: Vec2, radius: f32) {
+        self.server.world_mut().spawn((
+            sim::asteroid_bundle(position, radius, 7),
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+    }
+
+    /// Spawn a stationary ore fragment on the server.
+    pub fn spawn_fragment(&mut self, position: Vec2) {
+        let tick = self
+            .server
+            .world()
+            .resource::<lightyear::prelude::LocalTimeline>()
+            .tick();
+        self.server.world_mut().spawn((
+            sim::fragment_bundle(position, Vec2::ZERO, tick),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ));
+    }
+
+    /// Server-side count of asteroids / ore fragments.
+    pub fn server_asteroid_count(&mut self) -> usize {
+        let world = self.server.world_mut();
+        let mut query = world.query_filtered::<(), With<Asteroid>>();
+        query.iter(world).count()
+    }
+
+    pub fn server_fragment_count(&mut self) -> usize {
+        let world = self.server.world_mut();
+        let mut query = world.query_filtered::<(), With<OreFragment>>();
+        query.iter(world).count()
+    }
+
+    /// A client's view of the fragment count (confirmed copies).
+    pub fn client_fragment_count(&mut self, client_idx: usize) -> usize {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query_filtered::<(), With<OreFragment>>();
+        query.iter(world).count()
+    }
+
+    /// Server-side cargo of a client's ship: (current, capacity).
+    pub fn server_ship_cargo(&mut self, client_id: u64) -> Option<(u16, u16)> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &CargoHold)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, hold)| (hold.current, hold.capacity))
+    }
+
+    /// Overwrite a ship's cargo server-side (for handling tests).
+    pub fn set_ship_cargo(&mut self, client_id: u64, current: u16) {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &mut CargoHold)>();
+        for (id, mut hold) in query.iter_mut(world) {
+            if id.0 == PeerId::Netcode(client_id) {
+                hold.current = current.min(hold.capacity);
+            }
+        }
     }
 
     /// Which team the server put a client's ship on.

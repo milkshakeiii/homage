@@ -80,11 +80,50 @@ pub struct BulletMarker {
     pub owner: PeerId,
 }
 
-/// Despawns `lifetime_ticks` after `origin_tick`.
+/// Despawns `lifetime_ticks` after `origin_tick` (bullets, ore fragments).
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct BulletLifetime {
+pub struct Expires {
     pub origin_tick: Tick,
     pub lifetime_ticks: i32,
+}
+
+/// A minable rock. `seed` gives the client a stable irregular silhouette.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Asteroid {
+    pub radius: f32,
+    pub seed: u16,
+}
+
+/// Scoopable ore chunk, ejected by cracking an asteroid (or by dying with
+/// cargo aboard).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct OreFragment {
+    pub value: u16,
+}
+
+/// Undeposited ore aboard a ship. Server-authoritative; carried mass
+/// degrades handling (see shared sim).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CargoHold {
+    pub current: u16,
+    pub capacity: u16,
+}
+
+impl CargoHold {
+    pub fn empty(capacity: u16) -> Self {
+        Self {
+            current: 0,
+            capacity,
+        }
+    }
+
+    pub fn load_fraction(&self) -> f32 {
+        if self.capacity == 0 {
+            0.0
+        } else {
+            self.current as f32 / self.capacity as f32
+        }
+    }
 }
 
 /// Per-player color within the team's hue band: friend-or-foe is readable at
@@ -174,7 +213,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<PlayerColor>().replicate();
         app.component::<Health>().replicate();
         app.component::<BulletMarker>().replicate();
-        app.component::<BulletLifetime>().replicate();
+        app.component::<Expires>().replicate();
+        app.component::<Asteroid>().replicate();
+        app.component::<OreFragment>().replicate();
+        app.component::<CargoHold>().replicate();
 
         app.component::<Weapon>().replicate().predict();
 
