@@ -61,5 +61,8 @@ cargo run -p homage_client -- 1
 cargo run -p homage_client -- 2
 ```
 
-Controls: `W`/`↑` thrust, `S`/`↓` brake, `A`/`←` and `D`/`→` turn, `Space`
-fire. (Pilot-archetype hulls; see DESIGN.md §4.1 for the other archetypes.)
+Controls: `W`/`↑` thrust, `S`/`↓` brake, `A`/`←` and `D`/`→` turn, `Space` or
+`LMB` fire (Gunship hulls aim their turret with the mouse; Captain hulls take
+WASD as screen-space nudges — see DESIGN.md §4.1). Hold `Backspace` ~1s to
+self-destruct; while dead, digit keys choose the next hull (respawn is
+automatic after ~3s).

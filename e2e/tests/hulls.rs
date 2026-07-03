@@ -164,6 +164,38 @@ fn kill_client(net: &mut TestNet, victim_id: u64) {
     );
 }
 
+/// Self-destruct: the solo path to a new hull. Scuttling drops cargo like
+/// any death and the normal respawn (with the standing spawn order) follows.
+#[test]
+fn self_destruct_swaps_hulls_solo() {
+    let mut net = TestNet::new(6608, &[1]);
+    assert!(net.run_until(CONNECT_TICKS, |net| net.server_ship(1).is_some()));
+    net.teleport(1, Vec2::new(2500.0, -2500.0), 0.0);
+    net.set_bank(1, 100);
+    net.set_ship_cargo(1, u16::MAX);
+    net.client_send_spawn_order(0, HullKind::Harvester);
+    net.run_ticks(32);
+
+    net.client_send_self_destruct(0);
+    assert!(
+        net.run_until(256, |net| net.server_ship(1).is_none()),
+        "self-destruct never destroyed the ship"
+    );
+    assert!(
+        net.server_fragment_count() >= sim::FIGHTER_CARGO_CAPACITY as usize,
+        "scuttling should scatter the hold ({} fragments)",
+        net.server_fragment_count()
+    );
+    assert!(
+        net.run_until(
+            sim::RESPAWN_DELAY_TICKS as usize + 256,
+            |net| net.server_ship_hull(1) == Some(HullKind::Harvester)
+        ),
+        "never respawned as the ordered harvester (hull {:?})",
+        net.server_ship_hull(1)
+    );
+}
+
 /// Combat hulls require a live friendly strike carrier (DESIGN §2): a rich
 /// order for a corvette with no carrier is denied without charging.
 #[test]

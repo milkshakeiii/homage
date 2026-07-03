@@ -165,6 +165,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
         FixedUpdate,
         (
             receive_spawn_orders,
+            receive_self_destructs,
             hit_detection,
             asteroid_hit_detection,
             scoop_fragments,
@@ -447,6 +448,53 @@ fn receive_spawn_orders(
     }
 }
 
+/// Eject a dead ship's undeposited ore as scoopable fragments (DESIGN §3).
+fn scatter_cargo(commands: &mut Commands, position: Vec2, amount: u16, tick: Tick) {
+    for i in 0..amount {
+        let angle = i as f32 / amount.max(1) as f32 * core::f32::consts::TAU;
+        let dir = Vec2::from_angle(angle);
+        commands.spawn((
+            sim::fragment_bundle(position + dir * 20.0, dir * sim::FRAGMENT_SPEED * 0.7, tick),
+            Replicate::to_clients(NetworkTarget::All),
+            InterpolationTarget::to_clients(NetworkTarget::All),
+        ));
+    }
+}
+
+/// Scuttle on request: the only way to swap hulls without an enemy's help.
+/// Same consequences as any death (cargo scatters, normal respawn delay).
+fn receive_self_destructs(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<SelfDestruct>), With<ClientOf>>,
+    ships: Query<(Entity, &PlayerId, &Position, Option<&CargoHold>, &ControlledBy)>,
+) {
+    let tick = timeline.tick();
+    for (client_id, mut receiver) in &mut receivers {
+        for _ in receiver.receive() {
+            let Some((entity, _, position, cargo, controlled_by)) = ships
+                .iter()
+                .find(|(_, id, ..)| id.0 == client_id.0)
+            else {
+                continue;
+            };
+            info!("{:?} self-destructed", client_id.0);
+            scatter_cargo(
+                &mut commands,
+                position.0,
+                cargo.map_or(0, |hold| hold.current),
+                tick,
+            );
+            commands.entity(entity).try_despawn();
+            commands.spawn(RespawnTask {
+                client_id: client_id.0,
+                link: controlled_by.owner,
+                ticks_remaining: sim::RESPAWN_DELAY_TICKS,
+            });
+        }
+    }
+}
+
 fn spawn_ship(
     commands: &mut Commands,
     client_id: PeerId,
@@ -575,21 +623,12 @@ fn hit_detection(
             info!("Kill: {:?} destroyed {:?}", marker.owner, target_id);
             // Undeposited ore scatters as scoopable fragments — recoverable
             // by the victim's team, or stolen by the killer's (DESIGN §3).
-            let dropped = cargo.map_or(0, |hold| hold.current);
-            let position = target_pos.0;
-            for i in 0..dropped {
-                let angle = i as f32 / dropped.max(1) as f32 * core::f32::consts::TAU;
-                let dir = Vec2::from_angle(angle);
-                commands.spawn((
-                    sim::fragment_bundle(
-                        position + dir * 20.0,
-                        dir * sim::FRAGMENT_SPEED * 0.7,
-                        tick,
-                    ),
-                    Replicate::to_clients(NetworkTarget::All),
-                    InterpolationTarget::to_clients(NetworkTarget::All),
-                ));
-            }
+            scatter_cargo(
+                &mut commands,
+                target_pos.0,
+                cargo.map_or(0, |hold| hold.current),
+                tick,
+            );
             commands.entity(target).try_despawn();
             commands.spawn(RespawnTask {
                 client_id: target_id,

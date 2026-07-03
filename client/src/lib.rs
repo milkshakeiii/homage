@@ -74,6 +74,12 @@ struct MouseWorld {
     aim: f32,
 }
 
+/// Seconds Backspace has been held toward a self-destruct.
+#[derive(Resource, Default)]
+struct SelfDestructHold(f32);
+
+const SELF_DESTRUCT_HOLD_SECS: f32 = 1.0;
+
 pub fn build_client_app(config: ClientConfig) -> App {
     let mut app = App::new();
     if config.headless {
@@ -172,9 +178,16 @@ pub fn build_client_app(config: ClientConfig) -> App {
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
         app.add_systems(Startup, (setup_scene, setup_hud));
+        app.init_resource::<SelfDestructHold>();
         app.add_systems(
             Update,
-            (accumulate_taps, track_mouse, update_hud, respawn_menu),
+            (
+                accumulate_taps,
+                track_mouse,
+                self_destruct,
+                update_hud,
+                respawn_menu,
+            ),
         );
         app.add_systems(
             PostUpdate,
@@ -335,6 +348,7 @@ fn setup_hud(mut commands: Commands) {
 /// The choice is sent as a reliable SpawnOrder and applied (and paid for)
 /// when the respawn happens server-side.
 fn respawn_menu(
+    time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     alive: Query<&Team, (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
     fleet: Query<(&Team, &HullKind), With<PlayerId>>,
@@ -342,16 +356,24 @@ fn respawn_menu(
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
     mut chosen: Local<Option<HullKind>>,
     mut own_team: Local<Option<Team>>,
+    mut died_at: Local<Option<f32>>,
 ) {
     let Ok((mut visibility, mut text)) = menu.single_mut() else {
         return;
     };
     if let Ok(team) = alive.single() {
         *own_team = Some(*team);
+        *died_at = None;
         *visibility = Visibility::Hidden;
         return;
     }
     *visibility = Visibility::Visible;
+    let now = time.elapsed_secs();
+    let died = *died_at.get_or_insert(now);
+    // Client-side estimate of the server's respawn timer (close enough for
+    // UI; the server is authoritative).
+    let respawn_in =
+        (sim::RESPAWN_DELAY_TICKS as f32 * sim::TICK_DT - (now - died)).max(0.0);
     let have_carrier = own_team.is_some_and(|mine| {
         fleet
             .iter()
@@ -400,7 +422,12 @@ fn respawn_menu(
         ));
     }
     let next = hulls::display_name(chosen.unwrap_or(HullKind::Fighter));
-    text.0 = format!("SHIP DESTROYED\n{options}\nNext spawn: {next}");
+    let status = if respawn_in > 0.05 {
+        format!("respawning in {respawn_in:.1}s")
+    } else {
+        "respawning…".to_string()
+    };
+    text.0 = format!("SHIP DESTROYED — {status}\n{options}\nNext spawn: {next}");
 }
 
 fn log_hud_layout(
@@ -423,6 +450,7 @@ fn log_hud_layout(
 fn update_hud(
     time: Res<Time>,
     recent: Res<juice::RecentEarnings>,
+    destruct: Res<SelfDestructHold>,
     ship: Query<
         (Option<&Bank>, Option<&CargoHold>),
         (With<Predicted>, With<InputMarker<Inputs>>),
@@ -439,7 +467,15 @@ fn update_hud(
     } else {
         String::new()
     };
-    text.0 = format!("Banked: {bank}{earned}   Hold: {held}/{capacity}");
+    let warning = if destruct.0 > 0.0 {
+        format!(
+            "   !! SELF-DESTRUCT IN {:.1} !!",
+            (SELF_DESTRUCT_HOLD_SECS - destruct.0).max(0.0)
+        )
+    } else {
+        String::new()
+    };
+    text.0 = format!("Banked: {bank}{earned}   Hold: {held}/{capacity}{warning}");
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {
@@ -472,6 +508,29 @@ fn accumulate_taps(
 ) {
     if keypress.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left) {
         taps.fire = true;
+    }
+}
+
+/// Hold Backspace to scuttle: the only way to change hulls without dying in
+/// combat. The hold delay prevents fat-fingered fleet losses; the HUD shows
+/// the countdown while held.
+fn self_destruct(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    mut hold: ResMut<SelfDestructHold>,
+    mut sender: Query<&mut MessageSender<SelfDestruct>, With<Client>>,
+) {
+    if alive.is_empty() || !keys.pressed(KeyCode::Backspace) {
+        hold.0 = 0.0;
+        return;
+    }
+    let before = hold.0;
+    hold.0 += time.delta_secs();
+    if before < SELF_DESTRUCT_HOLD_SECS && hold.0 >= SELF_DESTRUCT_HOLD_SECS {
+        if let Ok(mut sender) = sender.single_mut() {
+            sender.send::<OrdersChannel>(SelfDestruct);
+        }
     }
 }
 

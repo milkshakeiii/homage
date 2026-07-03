@@ -212,6 +212,19 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
     }
 
+    /// Send a self-destruct order from a client, as holding Backspace would.
+    pub fn client_send_self_destruct(&mut self, client_idx: usize) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<SelfDestruct>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(SelfDestruct);
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<SelfDestruct> on the client entity");
+    }
+
     /// Which hull a client's server-side ship currently is.
     pub fn server_ship_hull(&mut self, client_id: u64) -> Option<HullKind> {
         let world = self.server.world_mut();

@@ -127,6 +127,11 @@ pub struct SpawnOrder {
     pub hull: HullKind,
 }
 
+/// Client → server: scuttle my ship. The only way to swap hulls without an
+/// enemy's help; drops cargo like any other death.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SelfDestruct;
+
 /// Reliable channel for player orders (spawn requests, later: build orders).
 pub struct OrdersChannel;
 
@@ -251,6 +256,8 @@ impl Plugin for ProtocolPlugin {
         })
         .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SpawnOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SelfDestruct>()
             .add_direction(NetworkDirection::ClientToServer);
 
         app.component::<Name>().replicate();
