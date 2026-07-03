@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["shared", "server", "client"]
+members = ["shared", "server", "client", "e2e"]
 
 [workspace.dependencies]
 homage_shared = { path = "shared" }

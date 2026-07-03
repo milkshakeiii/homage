@@ -1,0 +1,12 @@
+[package]
+name = "homage_e2e"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+avian2d = { workspace = true }
+homage_shared = { workspace = true }
+homage_server = { path = "../server" }
+homage_client = { path = "../client" }
+bevy = { workspace = true, features = ["std", "bevy_state", "multi_threaded"] }
+lightyear = { workspace = true }
