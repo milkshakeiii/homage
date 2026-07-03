@@ -302,10 +302,14 @@ holding map features.
   deposit; personal resource bank; cargo drop on death. All covered by e2e
   tests. (Harvester handling-under-load re-checks when the harvester hull
   lands in M2.)
-- **M2 — construction & spawning:** hull purchase; distinct hull stats;
-  Gunship archetype (corvette); Captain archetype (resource controller,
-  strike carrier); spawn-point selection; facility stocking + refit radius;
-  cold-start rules.
+- **M2 — construction & spawning (done):** hull purchase on respawn via
+  SpawnOrder; per-hull stats (fighter, harvester, corvette, resource
+  controller, strike carrier); Gunship archetype (corvette's mouse turret);
+  Captain archetype (omnidirectional drift); resource controller as mobile
+  dropoff; cold-start rules (combat hulls require a live carrier and spawn
+  beside it; carrier-types build at the mothership). Deferred: explicit
+  spawn-*point picking* UI (needs a map/death screen — for now placement is
+  rule-based); facility stocking + refit radius move to M3 with fittings.
 - **M3 — points & fittings:** point awards; fitting unlocks; the §5 catalog's
   tier-1 rows plus at least one exclusive tier-2 per slot type.
 - **M4 — win condition & breadth:** mothership HP/kill flow, match reset,

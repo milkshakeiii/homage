@@ -422,11 +422,13 @@ fn handle_connected(
     let team = teams.assign(client_id.0);
     let bank = banks.0.get(&client_id.0).copied().unwrap_or(0);
     // First spawn is always the free fighter; purchases apply on respawn.
+    let pose = sim::spawn_pose(client_id.0, team);
     spawn_ship(
         &mut commands,
         client_id.0,
         team,
         HullKind::Fighter,
+        pose,
         bank,
         trigger.entity,
     );
@@ -450,12 +452,13 @@ fn spawn_ship(
     client_id: PeerId,
     team: Team,
     kind: HullKind,
+    pose: (Position, Rotation),
     bank: u32,
     link: Entity,
 ) {
     let entity = commands
         .spawn((
-            sim::ship_bundle(client_id, team, kind),
+            sim::ship_bundle(client_id, team, kind, pose),
             Bank(bank),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
@@ -601,6 +604,7 @@ fn respawn_ships(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut RespawnTask)>,
     links: Query<(), With<ClientOf>>,
+    carriers: Query<(&Team, &Position, &HullKind), With<PlayerId>>,
     mut teams: ResMut<TeamAssignments>,
     mut banks: ResMut<Banks>,
     choices: Res<SpawnChoices>,
@@ -614,24 +618,56 @@ fn respawn_ships(
         // Skip the respawn if the client disconnected while dead.
         if links.get(task.link).is_ok() {
             let team = teams.assign(task.client_id);
-            // Buy the requested hull if the bank covers it; hulls are lost
-            // on death, so every non-free spawn is a fresh purchase
-            // (DESIGN §6). Broke players fall back to the free fighter.
             let desired = choices
                 .0
                 .get(&task.client_id)
                 .copied()
                 .unwrap_or(HullKind::Fighter);
+
+            // Facility rules (DESIGN §2/§6): combat hulls require a live
+            // friendly strike carrier and spawn beside it; economy and
+            // carrier-type hulls spawn at the mothership. A denied combat
+            // hull falls back to the free fighter without charging.
+            let carrier_pos = carriers
+                .iter()
+                .find(|(t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
+                .map(|(_, pos, _)| pos.0);
+            let allowed = match hulls::class(desired) {
+                hulls::HullClass::Combat => carrier_pos.is_some(),
+                _ => true,
+            };
+
+            // Buy the requested hull if allowed and the bank covers it;
+            // hulls are lost on death, so every non-free spawn is a fresh
+            // purchase (DESIGN §6).
             let bank = banks.0.entry(task.client_id).or_insert(0);
             let cost = hulls::stats(desired).cost;
-            let kind = if *bank >= cost {
+            let kind = if allowed && *bank >= cost {
                 *bank -= cost;
                 desired
             } else {
                 HullKind::Fighter
             };
+
+            let pose = match (hulls::class(kind), carrier_pos) {
+                (hulls::HullClass::Combat, Some(center)) => sim::spawn_pose_at(
+                    task.client_id,
+                    team,
+                    center,
+                    hulls::stats(HullKind::StrikeCarrier).width / 2.0 + 90.0,
+                ),
+                _ => sim::spawn_pose(task.client_id, team),
+            };
             info!("Respawning {:?} as {kind:?}", task.client_id);
-            spawn_ship(&mut commands, task.client_id, team, kind, *bank, task.link);
+            spawn_ship(
+                &mut commands,
+                task.client_id,
+                team,
+                kind,
+                pose,
+                *bank,
+                task.link,
+            );
         }
     }
 }

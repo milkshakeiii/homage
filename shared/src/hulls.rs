@@ -161,6 +161,26 @@ pub const PURCHASABLE: [HullKind; 5] = [
     HullKind::StrikeCarrier,
 ];
 
+/// Where a hull may spawn (DESIGN §2 cold start / §6 spawn flow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HullClass {
+    /// Fighter, harvester: spawn at the mothership or any friendly carrier —
+    /// a team knocked back to nothing can always rebuild.
+    Economy,
+    /// Corvette and up: require a live friendly strike carrier.
+    Combat,
+    /// Carrier-type hulls: built at the mothership only.
+    CarrierType,
+}
+
+pub fn class(kind: HullKind) -> HullClass {
+    match kind {
+        HullKind::Fighter | HullKind::Harvester => HullClass::Economy,
+        HullKind::Corvette => HullClass::Combat,
+        HullKind::ResourceController | HullKind::StrikeCarrier => HullClass::CarrierType,
+    }
+}
+
 pub fn display_name(kind: HullKind) -> &'static str {
     match kind {
         HullKind::Fighter => "Fighter",

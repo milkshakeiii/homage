@@ -336,19 +336,27 @@ fn setup_hud(mut commands: Commands) {
 /// when the respawn happens server-side.
 fn respawn_menu(
     keys: Res<ButtonInput<KeyCode>>,
-    alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
+    alive: Query<&Team, (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
+    fleet: Query<(&Team, &HullKind), With<PlayerId>>,
     mut menu: Query<(&mut Visibility, &mut Text), With<RespawnMenuText>>,
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
     mut chosen: Local<Option<HullKind>>,
+    mut own_team: Local<Option<Team>>,
 ) {
     let Ok((mut visibility, mut text)) = menu.single_mut() else {
         return;
     };
-    if !alive.is_empty() {
+    if let Ok(team) = alive.single() {
+        *own_team = Some(*team);
         *visibility = Visibility::Hidden;
         return;
     }
     *visibility = Visibility::Visible;
+    let have_carrier = own_team.is_some_and(|mine| {
+        fleet
+            .iter()
+            .any(|(team, kind)| *team == mine && *kind == HullKind::StrikeCarrier)
+    });
 
     const DIGITS: [KeyCode; 9] = [
         KeyCode::Digit1,
@@ -380,7 +388,16 @@ fn respawn_menu(
         } else {
             format!("{} ore", stats.cost)
         };
-        options.push_str(&format!("[{}] {} ({cost})   ", i + 1, hulls::display_name(*kind)));
+        let gate = if hulls::class(*kind) == hulls::HullClass::Combat && !have_carrier {
+            " — needs carrier!"
+        } else {
+            ""
+        };
+        options.push_str(&format!(
+            "[{}] {} ({cost}{gate})   ",
+            i + 1,
+            hulls::display_name(*kind)
+        ));
     }
     let next = hulls::display_name(chosen.unwrap_or(HullKind::Fighter));
     text.0 = format!("SHIP DESTROYED\n{options}\nNext spawn: {next}");

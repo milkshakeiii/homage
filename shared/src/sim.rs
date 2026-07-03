@@ -116,27 +116,46 @@ pub fn ship_physics(kind: HullKind) -> impl Bundle {
     )
 }
 
+/// Which way a team's ships face at spawn: toward the enemy.
+pub fn team_facing(team: Team) -> f32 {
+    match team {
+        Team::Blue => 0.0,
+        Team::Red => core::f32::consts::PI,
+    }
+}
+
 /// Deterministic spawn spot: a ring around the team's mothership, facing the
 /// enemy's side of the map.
 pub fn spawn_pose(client_id: PeerId, team: Team) -> (Position, Rotation) {
+    spawn_pose_at(client_id, team, team_anchor(team), SPAWN_RING_RADIUS)
+}
+
+/// Spawn on a ring around an arbitrary facility (e.g. a strike carrier).
+pub fn spawn_pose_at(
+    client_id: PeerId,
+    team: Team,
+    center: Vec2,
+    ring_radius: f32,
+) -> (Position, Rotation) {
     let angle = (client_id.to_bits() % 16) as f32 / 16.0 * TAU;
-    let position = team_anchor(team) + Vec2::from_angle(angle) * SPAWN_RING_RADIUS;
-    let facing = match team {
-        Team::Blue => 0.0,
-        Team::Red => core::f32::consts::PI,
-    };
-    (Position(position), Rotation::radians(facing))
+    let position = center + Vec2::from_angle(angle) * ring_radius;
+    (Position(position), Rotation::radians(team_facing(team)))
 }
 
 /// Everything a ship needs on the server; replication/prediction targets are
 /// added separately by the server.
-pub fn ship_bundle(client_id: PeerId, team: Team, kind: HullKind) -> impl Bundle {
+pub fn ship_bundle(
+    client_id: PeerId,
+    team: Team,
+    kind: HullKind,
+    pose: (Position, Rotation),
+) -> impl Bundle {
     let stats = crate::hulls::stats(kind);
     let weapon = stats.weapon.unwrap_or(crate::hulls::WeaponStats {
         cooldown_ticks: u16::MAX,
         bullet_speed: 0.0,
     });
-    let (position, rotation) = spawn_pose(client_id, team);
+    let (position, rotation) = pose;
     (
         PlayerId(client_id),
         team,

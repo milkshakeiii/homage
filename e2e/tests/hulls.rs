@@ -144,12 +144,88 @@ fn kill_and_respawn_as(port: u16, hull: HullKind) -> TestNet {
     net
 }
 
-/// The Gunship archetype fires along the mouse aim, not the hull facing:
-/// a corvette pointing +X hits a target due +Y when the turret says so.
+/// Shooter (index 0, client 1) kills `victim_id`, which respawns.
+fn kill_client(net: &mut TestNet, victim_id: u64) {
+    net.teleport(1, Vec2::ZERO, 0.0);
+    net.teleport(victim_id, Vec2::new(300.0, 0.0), 0.0);
+    net.run_ticks(64);
+    net.set_input(0, fire());
+    assert!(
+        net.run_until(2048, |net| net.server_ship(victim_id).is_none()),
+        "client {victim_id} never died"
+    );
+    net.set_input(0, Some(ShipInput::default()));
+    assert!(
+        net.run_until(
+            sim::RESPAWN_DELAY_TICKS as usize + 256,
+            |net| net.server_ship(victim_id).is_some()
+        ),
+        "client {victim_id} never respawned"
+    );
+}
+
+/// Combat hulls require a live friendly strike carrier (DESIGN §2): a rich
+/// order for a corvette with no carrier is denied without charging.
 #[test]
-fn corvette_turret_fires_along_aim_not_facing() {
-    let mut net = kill_and_respawn_as(6604, HullKind::Corvette);
+fn corvette_is_denied_without_a_carrier() {
+    let mut net = TestNet::new(6607, &[1, 2]);
+    assert!(net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 2));
+    net.set_bank(2, 100);
+    net.client_send_spawn_order(1, HullKind::Corvette);
+    net.run_ticks(32);
+    kill_client(&mut net, 2);
+    assert_eq!(
+        net.server_ship_hull(2),
+        Some(HullKind::Fighter),
+        "combat hull must be denied with no friendly carrier"
+    );
+    assert_eq!(net.server_bank(2), 100, "denied purchase must not charge");
+}
+
+/// With a friendly carrier alive: the corvette spawns beside it, and the
+/// Gunship archetype fires along the mouse aim, not the hull facing — a
+/// corvette pointing +X hits a target due +Y when the turret says so.
+#[test]
+fn corvette_spawns_at_carrier_and_turret_fires_along_aim() {
+    // Teams for [1,2,3,4] alternate: 1/3 together, 2/4 together.
+    let mut net = TestNet::new(6604, &[1, 2, 3, 4]);
+    assert!(
+        net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 4),
+        "clients never connected"
+    );
+    let (t1, t2) = (
+        net.server_ship_team(1).unwrap(),
+        net.server_ship_team(2).unwrap(),
+    );
+    assert_eq!(net.server_ship_team(4), Some(t2), "4 should join team 2");
+    assert_ne!(t1, t2);
+
+    // Park bystanders far from the kill corridor along +X from the origin.
+    net.teleport(2, Vec2::new(0.0, 3000.0), 0.0);
+    net.teleport(3, Vec2::new(0.0, -3000.0), 0.0);
+
+    // Client 4 becomes team 2's strike carrier, parked forward.
+    net.set_bank(4, 100);
+    net.client_send_spawn_order(3, HullKind::StrikeCarrier);
+    net.run_ticks(32);
+    kill_client(&mut net, 4);
+    assert_eq!(net.server_ship_hull(4), Some(HullKind::StrikeCarrier));
+    let carrier_pos = Vec2::new(2500.0, 500.0);
+    net.teleport(4, carrier_pos, 0.0);
+    net.run_ticks(16);
+
+    // Client 2 buys a corvette; it must spawn beside the carrier.
+    net.set_bank(2, 100);
+    net.client_send_spawn_order(1, HullKind::Corvette);
+    net.run_ticks(32);
+    kill_client(&mut net, 2);
     assert_eq!(net.server_ship_hull(2), Some(HullKind::Corvette));
+    let (spawn_pos, _) = net.server_ship(2).unwrap();
+    assert!(
+        spawn_pos.distance(carrier_pos) < 300.0,
+        "corvette spawned {:.0} units from its carrier",
+        spawn_pos.distance(carrier_pos)
+    );
 
     // Corvette (client 2) faces +X; the enemy fighter (client 1) sits due
     // +Y of it. Only turret-aimed fire can connect.
