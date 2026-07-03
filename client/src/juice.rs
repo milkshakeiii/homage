@@ -44,6 +44,7 @@ impl Plugin for JuicePlugin {
         app.init_resource::<CameraRig>();
         app.init_resource::<ShipPosCache>();
         app.init_resource::<KillRings>();
+        app.init_resource::<RecentEarnings>();
         app.add_systems(Startup, setup_sfx);
         app.add_systems(
             Update,
@@ -52,7 +53,6 @@ impl Plugin for JuicePlugin {
                 detect_damage,
                 detect_own_fire,
                 detect_deposit,
-                animate_popups,
                 ensure_trails,
                 decay_shake,
             ),
@@ -407,24 +407,38 @@ fn draw_deposit_beam(
     }
 }
 
-/// Floating feedback text ("+1" on a banked unit): drifts up and fades.
-#[derive(Component)]
-struct FadePopup {
-    born: f32,
+/// Earnings since the last pause in earning, shown as "(+N)" next to the
+/// banked number in the HUD (Henry's call: one accumulating number beats a
+/// stream of floating +1s). Generalizes to points later.
+#[derive(Resource, Default)]
+pub struct RecentEarnings {
+    pub amount: u32,
+    pub last_earn: f32,
 }
 
-const POPUP_SECS: f32 = 0.9;
-const POPUP_DRIFT: f32 = 38.0; // units/s upward
+impl RecentEarnings {
+    /// How long after the last earning tick the accumulator keeps showing.
+    pub const LINGER_SECS: f32 = 2.0;
 
-/// A soft chime and a floating "+N" every time the local bank ticks up.
+    pub fn visible(&self, now: f32) -> bool {
+        self.amount > 0 && now - self.last_earn < Self::LINGER_SECS
+    }
+}
+
+/// A soft chime per banked unit, and the (+N) accumulator for the HUD.
 fn detect_deposit(
     mut commands: Commands,
     time: Res<Time>,
     mut last_bank: Local<Option<u32>>,
-    ship: Query<(&Bank, &Position), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    mut recent: ResMut<RecentEarnings>,
+    ship: Query<&Bank, (With<Predicted>, With<InputMarker<Inputs>>)>,
     sfx: Option<Res<Sfx>>,
 ) {
-    let Ok((bank, position)) = ship.single() else {
+    let now = time.elapsed_secs();
+    if !recent.visible(now) && recent.amount > 0 {
+        recent.amount = 0;
+    }
+    let Ok(bank) = ship.single() else {
         *last_bank = None;
         return;
     };
@@ -433,41 +447,11 @@ fn detect_deposit(
             if let Some(sfx) = &sfx {
                 play(&mut commands, &sfx.chime, 0.3);
             }
-            commands.spawn((
-                FadePopup {
-                    born: time.elapsed_secs(),
-                },
-                Text2d::new(format!("+{}", bank.0 - previous)),
-                TextFont {
-                    font_size: FontSize::Px(20.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.85, 0.3)),
-                Transform::from_translation(
-                    (position.0 + Vec2::new(0.0, sim::SHIP_LENGTH)).extend(5.0),
-                ),
-            ));
+            recent.amount += bank.0 - previous;
+            recent.last_earn = now;
         }
     }
     *last_bank = Some(bank.0);
-}
-
-/// Drift popups upward and fade them out.
-fn animate_popups(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut popups: Query<(Entity, &FadePopup, &mut Transform, &mut TextColor)>,
-) {
-    let now = time.elapsed_secs();
-    for (entity, popup, mut transform, mut color) in &mut popups {
-        let age = now - popup.born;
-        if age > POPUP_SECS {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        transform.translation.y += POPUP_DRIFT * time.delta_secs();
-        color.0 = color.0.with_alpha(1.0 - age / POPUP_SECS);
-    }
 }
 
 // SFX (synthesized placeholders — no asset files)

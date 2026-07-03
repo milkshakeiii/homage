@@ -309,8 +309,12 @@ fn log_hud_layout(
     }
 }
 
-/// Bank and hold of the local ship, top-left.
+/// Bank and hold of the local ship, top-left. While earning, the banked
+/// number grows a "(+N)" accumulator that fades a couple of seconds after
+/// the earning pauses.
 fn update_hud(
+    time: Res<Time>,
+    recent: Res<juice::RecentEarnings>,
     ship: Query<
         (Option<&Bank>, Option<&CargoHold>),
         (With<Predicted>, With<InputMarker<Inputs>>),
@@ -322,7 +326,12 @@ fn update_hud(
     };
     let bank = bank.map_or(0, |b| b.0);
     let (held, capacity) = cargo.map_or((0, 0), |c| (c.current, c.capacity));
-    text.0 = format!("Banked: {bank}   Hold: {held}/{capacity}");
+    let earned = if recent.visible(time.elapsed_secs()) {
+        format!(" (+{})", recent.amount)
+    } else {
+        String::new()
+    };
+    text.0 = format!("Banked: {bank}{earned}   Hold: {held}/{capacity}");
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {

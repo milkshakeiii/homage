@@ -13,6 +13,9 @@ bevy = { workspace = true, features = [
   "bevy_audio",
   "wav",
   "bevy_ui",
+  # Layout and rendering are separate features: without bevy_ui_render, UI
+  # text computes layout but never draws.
+  "bevy_ui_render",
   "bevy_text",
   "default_font",
 ] }
