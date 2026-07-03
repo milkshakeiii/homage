@@ -285,11 +285,12 @@ holding map features.
 
 - **M0 — foundation (done):** flight + combat netcode: prediction, prespawned
   bullets, lag-compensated hits, respawn; e2e test harness.
-- **M0.5 — controls & feel foundation:** superset input protocol (§4.3);
-  Pilot archetype polish — input buffering, brake, tuned drift (§4.2 bars);
-  camera look-ahead + speed zoom; first juice pass (thruster trails, hit
-  flash, kill rings, capped shake); placeholder synth SFX. Exit bar: flying
-  the starter fighter around an empty arena is *fun*.
+- **M0.5 — controls & feel foundation (done):** superset input protocol
+  (§4.3); Pilot archetype polish — input buffering, brake, tuned drift (§4.2
+  bars); camera look-ahead + speed zoom; first juice pass (thruster trails,
+  hit flash, kill rings, capped shake); placeholder synth SFX; fixed client
+  prediction to actually simulate locally (smooth flight, same-frame input
+  response). Exit bar met: Henry flew it.
 - **M1 — economy loop:** teams; mothership as structure + dropoff; asteroids
   that crack into scoopable fragments; cargo with mass penalty; deposit;
   personal resource bank; cargo drop on death. Harvester handling-under-load

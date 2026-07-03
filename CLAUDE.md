@@ -52,6 +52,14 @@ adding a crate to be slow.
   replicate but are never predicted. Movement/firing are predicted.
 - Don't filter shared systems on `Without<Interpolated>` — lightyear 0.28
   leaves `Interpolated` on server-side entities (see note in `sim.rs`).
+- Physics components (RigidBody, Collider, damping) are NOT replicated. Any
+  predicted entity the client must simulate needs them inserted client-side
+  (see `add_predicted_ship_physics` in `client/src/lib.rs`); without a
+  RigidBody avian silently ignores the entity and "prediction" degrades to
+  snapping to server packets at the send rate. Symptom: velocity changes but
+  position doesn't.
+- The client verifies smooth rendering empirically: run with
+  `HOMAGE_MOTION_DEBUG=1` and check the fraction of zero-delta frames.
 - Island sleeping is disabled in avian (incompatible with rollbacks); the
   IslandPlugin itself must stay (see `shared/src/lib.rs`).
 - `app.set_error_handler(bevy::ecs::error::warn)` on the server: ECS command
