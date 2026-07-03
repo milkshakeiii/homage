@@ -11,7 +11,6 @@ use bevy::transform::TransformSystems;
 use homage_shared::protocol::*;
 use homage_shared::sim;
 use lightyear::frame_interpolation::prelude::FrameInterpolationSystems;
-use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::*;
 use lightyear::prelude::*;
 use std::collections::{HashMap, VecDeque};
