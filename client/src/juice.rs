@@ -378,7 +378,8 @@ fn draw_kill_rings(mut gizmos: Gizmos, mut rings: ResMut<KillRings>, time: Res<T
 }
 
 /// While the local ship is depositing (in a friendly dropoff radius with ore
-/// aboard), draw a shimmering transfer beam to the dropoff.
+/// aboard), draw a shimmering transfer beam to the dropoff. Dropoffs are the
+/// mothership and friendly resource controllers.
 fn draw_deposit_beam(
     mut gizmos: Gizmos,
     time: Res<Time>,
@@ -386,7 +387,11 @@ fn draw_deposit_beam(
         (&Position, &Team, &CargoHold),
         (With<Predicted>, With<InputMarker<Inputs>>),
     >,
-    dropoffs: Query<(&Position, &Team), With<Mothership>>,
+    motherships: Query<(&Position, &Team), With<Mothership>>,
+    controllers: Query<
+        (&Position, &Team, &HullKind),
+        (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
+    >,
 ) {
     let Ok((ship_pos, ship_team, cargo)) = ship.single() else {
         return;
@@ -394,17 +399,22 @@ fn draw_deposit_beam(
     if cargo.current == 0 {
         return;
     }
-    for (dropoff_pos, dropoff_team) in &dropoffs {
-        if dropoff_team != ship_team
-            || dropoff_pos.0.distance(ship_pos.0) > sim::DEPOSIT_RADIUS
-        {
+    let dropoffs = motherships
+        .iter()
+        .map(|(pos, team)| (pos.0, *team, sim::DEPOSIT_RADIUS))
+        .chain(controllers.iter().filter_map(|(pos, team, kind)| {
+            (*kind == HullKind::ResourceController)
+                .then_some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+        }));
+    for (dropoff_pos, dropoff_team, radius) in dropoffs {
+        if dropoff_team != *ship_team || dropoff_pos.distance(ship_pos.0) > radius {
             continue;
         }
         let wobble = (time.elapsed_secs() * 20.0).sin() * 3.0;
-        let dir = (dropoff_pos.0 - ship_pos.0).normalize_or_zero();
-        let mid = ship_pos.0.lerp(dropoff_pos.0, 0.5) + dir.perp() * wobble;
+        let dir = (dropoff_pos - ship_pos.0).normalize_or_zero();
+        let mid = ship_pos.0.lerp(dropoff_pos, 0.5) + dir.perp() * wobble;
         let color = Color::srgb(1.0, 0.85, 0.3).with_alpha(0.7);
-        gizmos.linestrip_2d([ship_pos.0, mid, dropoff_pos.0], color);
+        gizmos.linestrip_2d([ship_pos.0, mid, dropoff_pos], color);
     }
 }
 

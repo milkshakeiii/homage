@@ -346,22 +346,32 @@ fn asteroid_hit_detection(
 /// Hovering inside a friendly dropoff's radius transfers ore from the hold
 /// into the player's bank, one unit per DEPOSIT_INTERVAL_TICKS: deposits are
 /// a deliberate, vulnerable pause rather than a drive-by (DESIGN §3).
+/// Dropoffs: the mothership, plus any friendly resource controller (the
+/// mobile forward dropoff, DESIGN §5).
 fn deposit_cargo(
     timeline: Res<LocalTimeline>,
     mut banks: ResMut<Banks>,
-    dropoffs: Query<(&Position, &Team), With<Mothership>>,
+    motherships: Query<(&Position, &Team), With<Mothership>>,
+    controllers: Query<(&Position, &Team, &HullKind), With<PlayerId>>,
     mut ships: Query<(&PlayerId, &Team, &Position, &mut CargoHold, &mut Bank)>,
 ) {
     if timeline.tick().0 % sim::DEPOSIT_INTERVAL_TICKS as u32 != 0 {
         return;
     }
+    let dropoffs: Vec<(Vec2, Team, f32)> = motherships
+        .iter()
+        .map(|(pos, team)| (pos.0, *team, sim::DEPOSIT_RADIUS))
+        .chain(controllers.iter().filter_map(|(pos, team, kind)| {
+            (*kind == HullKind::ResourceController)
+                .then_some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+        }))
+        .collect();
     for (player, team, position, mut hold, mut bank) in &mut ships {
         if hold.current == 0 {
             continue;
         }
-        let at_dropoff = dropoffs.iter().any(|(dpos, dteam)| {
-            dteam == team
-                && dpos.0.distance_squared(position.0) < sim::DEPOSIT_RADIUS * sim::DEPOSIT_RADIUS
+        let at_dropoff = dropoffs.iter().any(|(dpos, dteam, radius)| {
+            dteam == team && dpos.distance_squared(position.0) < radius * radius
         });
         if !at_dropoff {
             continue;

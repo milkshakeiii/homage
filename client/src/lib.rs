@@ -596,17 +596,35 @@ fn draw_ships(
         let flashing = flash.is_some_and(|f| time.elapsed_secs() < f.0);
         let draw_color = if flashing { Color::WHITE } else { color.0 };
         let pos = position.0;
-        let nose = pos + *rotation * Vec2::new(length / 2.0, 0.0);
-        let left = pos + *rotation * Vec2::new(-length / 2.0, width / 2.0);
-        let right = pos + *rotation * Vec2::new(-length / 2.0, -width / 2.0);
-        gizmos.linestrip_2d([nose, left, right, nose], draw_color);
-        if flashing {
-            // Second, slightly larger outline so the flash pops at a glance.
-            let grow = 1.35;
-            let nose = pos + (nose - pos) * grow;
-            let left = pos + (left - pos) * grow;
-            let right = pos + (right - pos) * grow;
-            gizmos.linestrip_2d([nose, left, right, nose], Color::WHITE.with_alpha(0.6));
+        if stats.archetype == hulls::Archetype::Captain {
+            // Captain hulls are round: facing is meaningless, presence is
+            // the point.
+            gizmos.circle_2d(Isometry2d::from_translation(pos), width / 2.0, draw_color);
+            gizmos.circle_2d(
+                Isometry2d::from_translation(pos),
+                width * 0.28,
+                draw_color.with_alpha(0.5),
+            );
+            if flashing {
+                gizmos.circle_2d(
+                    Isometry2d::from_translation(pos),
+                    width / 2.0 * 1.2,
+                    Color::WHITE.with_alpha(0.6),
+                );
+            }
+        } else {
+            let nose = pos + *rotation * Vec2::new(length / 2.0, 0.0);
+            let left = pos + *rotation * Vec2::new(-length / 2.0, width / 2.0);
+            let right = pos + *rotation * Vec2::new(-length / 2.0, -width / 2.0);
+            gizmos.linestrip_2d([nose, left, right, nose], draw_color);
+            if flashing {
+                // Second, slightly larger outline so the flash pops.
+                let grow = 1.35;
+                let nose = pos + (nose - pos) * grow;
+                let left = pos + (left - pos) * grow;
+                let right = pos + (right - pos) * grow;
+                gizmos.linestrip_2d([nose, left, right, nose], Color::WHITE.with_alpha(0.6));
+            }
         }
 
         if let Some(health) = health {

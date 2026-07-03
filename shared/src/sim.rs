@@ -72,6 +72,8 @@ pub const MOTHERSHIP_RADIUS: f32 = 120.0;
 pub const MOTHERSHIP_HEALTH: u16 = 1000;
 /// Ship-to-dropoff distance that counts as depositing (lenient: guidepost 5).
 pub const DEPOSIT_RADIUS: f32 = MOTHERSHIP_RADIUS + 130.0;
+/// Deposit radius around a friendly resource controller (the mobile dropoff).
+pub const CONTROLLER_DEPOSIT_RADIUS: f32 = 170.0;
 /// One ore unit transfers per this many ticks — a full fighter hold takes
 /// ~1s of hovering, so depositing is a deliberate, vulnerable moment.
 pub const DEPOSIT_INTERVAL_TICKS: u16 = 12;
@@ -85,9 +87,13 @@ pub fn team_anchor(team: Team) -> Vec2 {
     }
 }
 
-/// Ships face +X at zero rotation.
+/// Ships face +X at zero rotation. Captain hulls are round: facing is
+/// meaningless for them.
 fn ship_collider(kind: HullKind) -> Collider {
     let stats = crate::hulls::stats(kind);
+    if stats.archetype == crate::hulls::Archetype::Captain {
+        return Collider::circle(stats.width / 2.0 * 0.9);
+    }
     Collider::convex_hull(vec![
         Vec2::new(stats.length / 2.0, 0.0),
         Vec2::new(-stats.length / 2.0, stats.width / 2.0),
@@ -231,6 +237,23 @@ pub fn player_movement(
         let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let input = &action_state.0 .0;
         let load = cargo.map_or(0.0, CargoHold::load_fraction);
+
+        // Captain hulls (DESIGN §4.1) drift omnidirectionally: WASD nudges in
+        // screen space, no meaningful facing, the mouse is for abilities.
+        if stats.archetype == crate::hulls::Archetype::Captain {
+            let nudge = Vec2::new(
+                (input.turn_right as i8 - input.turn_left as i8) as f32,
+                (input.thrust as i8 - input.brake as i8) as f32,
+            );
+            if nudge != Vec2::ZERO {
+                linvel.0 += nudge.normalize() * stats.accel * TICK_DT;
+            }
+            if angvel.0 != 0.0 {
+                angvel.0 = 0.0;
+            }
+            continue;
+        }
+
         if input.thrust {
             let accel = stats.accel * (1.0 - CARGO_ACCEL_PENALTY * load);
             linvel.0 += *rotation * Vec2::X * accel * TICK_DT;

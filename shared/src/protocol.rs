@@ -108,6 +108,8 @@ pub enum HullKind {
     Fighter,
     Harvester,
     Corvette,
+    ResourceController,
+    StrikeCarrier,
 }
 
 /// Where a Gunship hull's turret points (world-space radians). Written from

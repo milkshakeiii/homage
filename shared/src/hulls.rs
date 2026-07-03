@@ -107,22 +107,66 @@ const CORVETTE: HullStats = HullStats {
     }),
 };
 
+/// The mobile dropoff (DESIGN §5/§6): a Captain-archetype carrier-type hull.
+/// Pushing it toward contested fields shortens your team's haul routes and
+/// paints a target on you. Unarmed; its weapon is positioning.
+const RESOURCE_CONTROLLER: HullStats = HullStats {
+    archetype: Archetype::Captain,
+    cost: 40,
+    health: 12,
+    cargo_capacity: 0,
+    accel: 150.0,
+    brake: 200.0,
+    turn_speed: 0.0,
+    max_speed: 140.0,
+    length: 90.0,
+    width: 90.0,
+    hit_radius: 42.0,
+    weapon: None,
+};
+
+/// The forward spawn point for combat hulls (DESIGN §5): the team's mobile
+/// front line. Unarmed for now; escorting it is your team's job.
+const STRIKE_CARRIER: HullStats = HullStats {
+    archetype: Archetype::Captain,
+    cost: 60,
+    health: 20,
+    cargo_capacity: 0,
+    accel: 130.0,
+    brake: 180.0,
+    turn_speed: 0.0,
+    max_speed: 115.0,
+    length: 120.0,
+    width: 120.0,
+    hit_radius: 56.0,
+    weapon: None,
+};
+
 pub fn stats(kind: HullKind) -> &'static HullStats {
     match kind {
         HullKind::Fighter => &FIGHTER,
         HullKind::Harvester => &HARVESTER,
         HullKind::Corvette => &CORVETTE,
+        HullKind::ResourceController => &RESOURCE_CONTROLLER,
+        HullKind::StrikeCarrier => &STRIKE_CARRIER,
     }
 }
 
 /// Hulls offered in the respawn menu, in display order.
-pub const PURCHASABLE: [HullKind; 3] =
-    [HullKind::Fighter, HullKind::Harvester, HullKind::Corvette];
+pub const PURCHASABLE: [HullKind; 5] = [
+    HullKind::Fighter,
+    HullKind::Harvester,
+    HullKind::Corvette,
+    HullKind::ResourceController,
+    HullKind::StrikeCarrier,
+];
 
 pub fn display_name(kind: HullKind) -> &'static str {
     match kind {
         HullKind::Fighter => "Fighter",
         HullKind::Harvester => "Harvester",
         HullKind::Corvette => "Corvette",
+        HullKind::ResourceController => "Res. Controller",
+        HullKind::StrikeCarrier => "Strike Carrier",
     }
 }
