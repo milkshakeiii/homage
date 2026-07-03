@@ -33,11 +33,15 @@ impl Health {
 /// Fire-rate limiter: after firing on `last_fire_tick` you must wait
 /// `cooldown_ticks` before firing again. Predicted so that the client's
 /// firing decisions roll back identically to the server's.
+///
+/// `fire_requested` implements input buffering (feel guidepost: a fire press
+/// during cooldown fires on the first legal tick instead of being eaten).
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Weapon {
     pub last_fire_tick: Tick,
     pub cooldown_ticks: u16,
     pub bullet_speed: f32,
+    pub fire_requested: Option<Tick>,
 }
 
 impl Weapon {
@@ -46,6 +50,7 @@ impl Weapon {
             last_fire_tick: Tick(0),
             cooldown_ticks,
             bullet_speed,
+            fire_requested: None,
         }
     }
 }
@@ -69,13 +74,48 @@ pub fn color_from_id(client_id: PeerId) -> Color {
 
 // Inputs
 
-/// One tick of input for an asteroids-style ship.
+/// One tick of input, a superset across all control archetypes (DESIGN §4.1):
+/// Pilot hulls read the buttons, Gunship hulls will read `aim`, Captain hulls
+/// will read `cursor_*`. Unused fields stay zero, so the wire format and
+/// prediction rollback are archetype-agnostic. Analog values are quantized to
+/// integers to keep `Eq` (and input-delta compression) exact.
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq, Clone, Reflect)]
 pub struct ShipInput {
     pub thrust: bool,
+    pub brake: bool,
     pub turn_left: bool,
     pub turn_right: bool,
     pub fire: bool,
+    pub ability: bool,
+    /// Turret aim as a quantized world-space angle: `TAU * aim / 65536`.
+    pub aim: u16,
+    /// Ability-target cursor in world space, quantized to 0.5-unit steps.
+    pub cursor_x: i16,
+    pub cursor_y: i16,
+}
+
+/// World units per cursor quantization step.
+pub const CURSOR_STEP: f32 = 0.5;
+
+impl ShipInput {
+    pub fn aim_radians(&self) -> f32 {
+        self.aim as f32 / 65536.0 * core::f32::consts::TAU
+    }
+
+    pub fn set_aim_radians(&mut self, radians: f32) {
+        let turns = radians / core::f32::consts::TAU;
+        self.aim = (turns.rem_euclid(1.0) * 65536.0) as u16;
+    }
+
+    pub fn cursor_world(&self) -> Vec2 {
+        Vec2::new(self.cursor_x as f32, self.cursor_y as f32) * CURSOR_STEP
+    }
+
+    pub fn set_cursor_world(&mut self, world: Vec2) {
+        let q = (world / CURSOR_STEP).round();
+        self.cursor_x = q.x.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        self.cursor_y = q.y.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Reflect)]

@@ -3656,6 +3656,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "homage_e2e"
+version = "0.1.0"
+dependencies = [
+ "avian2d",
+ "bevy",
+ "homage_client",
+ "homage_server",
+ "homage_shared",
+ "lightyear",
+]
+
+[[package]]
 name = "homage_server"
 version = "0.1.0"
 dependencies = [

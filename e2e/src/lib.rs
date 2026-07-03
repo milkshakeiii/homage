@@ -110,6 +110,47 @@ impl TestNet {
             .map(|(_, pos, health)| (pos, health))
     }
 
+    /// The server-side velocity of one client's ship, if alive.
+    pub fn server_ship_velocity(&mut self, client_id: u64) -> Option<Vec2> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &LinearVelocity)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, vel)| vel.0)
+    }
+
+    /// Server-side count of bullets in flight.
+    pub fn server_bullet_count(&mut self) -> usize {
+        let world = self.server.world_mut();
+        let mut query = world.query_filtered::<(), With<BulletMarker>>();
+        query.iter(world).count()
+    }
+
+    /// The server's current view of a client's input (for diagnosing input
+    /// transmission in tests).
+    pub fn server_input(&mut self, client_id: u64) -> Option<ShipInput> {
+        use lightyear::prelude::input::native::ActionState;
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &ActionState<Inputs>)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, action)| action.0 .0.clone())
+    }
+
+    /// Point a client's server-side ship in a direction without touching its
+    /// velocity (unlike `teleport`).
+    pub fn set_rotation(&mut self, client_id: u64, angle: f32) {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &mut Rotation)>();
+        for (id, mut rot) in query.iter_mut(world) {
+            if id.0 == PeerId::Netcode(client_id) {
+                *rot = Rotation::radians(angle);
+            }
+        }
+    }
+
     /// Teleport a client's server-side ship and zero its velocity. Lag
     /// compensation samples position history, so wait ~35 ticks after this
     /// before relying on hits at the new location.

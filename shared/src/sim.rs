@@ -17,7 +17,12 @@ pub const TICK_DT: f32 = 1.0 / crate::FIXED_TIMESTEP_HZ as f32;
 pub const SHIP_LENGTH: f32 = 32.0;
 pub const SHIP_WIDTH: f32 = 19.0;
 pub const SHIP_HEALTH: u16 = 3;
-pub const THRUST_ACCEL: f32 = 300.0; // units/s^2
+// Feel bar (DESIGN §4.2): ~1.5s from rest to max speed, and reversing course
+// noticeably faster than accelerating. With damping 0.4 and accel 360, a
+// fighter hits the 420 cap in ~1.6s; thrusting against full speed stops it
+// in ~0.8s; braking is in between.
+pub const THRUST_ACCEL: f32 = 360.0; // units/s^2
+pub const BRAKE_DECEL: f32 = 480.0; // units/s^2, opposes velocity
 pub const TURN_SPEED: f32 = 3.5; // rad/s
 pub const SHIP_DAMPING: f32 = 0.4; // avian LinearDamping
 pub const MAX_SPEED: f32 = 420.0;
@@ -26,6 +31,8 @@ pub const BULLET_SIZE: f32 = 2.0;
 pub const BULLET_SPEED: f32 = 500.0;
 pub const BULLET_LIFETIME_TICKS: i32 = 128; // 2s at 64Hz
 pub const FIRE_COOLDOWN_TICKS: u16 = 16; // 4 shots/s
+/// How long a fire press stays buffered waiting for the cooldown (125ms).
+pub const FIRE_BUFFER_TICKS: i32 = 8;
 
 pub const SPAWN_RING_RADIUS: f32 = 200.0;
 pub const RESPAWN_DELAY_TICKS: i32 = 192; // 3s at 64Hz
@@ -105,6 +112,18 @@ pub fn player_movement(
         if input.thrust {
             linvel.0 += *rotation * Vec2::X * THRUST_ACCEL * TICK_DT;
         }
+        // Brake opposes the velocity vector regardless of facing: a recovery
+        // tool (skill floor), while reversing by turn-and-thrust stays the
+        // faster, skillful option (skill ceiling).
+        if input.brake {
+            let speed = linvel.0.length();
+            let decel = BRAKE_DECEL * TICK_DT;
+            linvel.0 = if decel >= speed {
+                Vec2::ZERO
+            } else {
+                linvel.0 - linvel.0 * (decel / speed)
+            };
+        }
         let desired_ang_vel = if input.turn_left {
             TURN_SPEED
         } else if input.turn_right {
@@ -173,15 +192,26 @@ pub fn shared_player_firing(
             continue;
         }
         let Inputs(input) = &action_state.0;
-        if !input.fire {
+        // Input buffering: remember the most recent fire press and honor it
+        // on the first tick the cooldown allows, so a press during cooldown
+        // is never eaten. All in wrapped tick arithmetic, and all part of the
+        // predicted Weapon component so rollbacks replay it identically.
+        if input.fire {
+            weapon.fire_requested = Some(current_tick);
+        }
+        let Some(requested) = weapon.fire_requested else {
+            continue;
+        };
+        if (current_tick - requested) > FIRE_BUFFER_TICKS {
+            weapon.fire_requested = None;
             continue;
         }
-        // Cooldown, in wrapped tick arithmetic.
         let ticks_since_fire = current_tick - weapon.last_fire_tick;
         if ticks_since_fire.abs() <= weapon.cooldown_ticks as i32 {
             continue;
         }
         weapon.last_fire_tick = current_tick;
+        weapon.fire_requested = None;
 
         // The bullet spawns off the nose and inherits the ship's velocity.
         let forward = *rotation * Vec2::X;

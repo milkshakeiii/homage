@@ -52,6 +52,15 @@ struct BotMode(bool);
 #[derive(Resource, Default)]
 pub struct InputOverride(pub Option<ShipInput>);
 
+/// Presses caught at render rate so a tap shorter than a simulation tick
+/// still registers (feel guidepost: no input is ever eaten). Set by
+/// `accumulate_taps` in `Update`, consumed by `buffer_input` on the next
+/// fixed tick.
+#[derive(Resource, Default)]
+struct TapBuffer {
+    fire: bool,
+}
+
 pub fn build_client_app(config: ClientConfig) -> App {
     let mut app = App::new();
     if config.headless {
@@ -75,6 +84,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.add_plugins(SharedPlugin);
     app.insert_resource(BotMode(config.bot));
     app.init_resource::<InputOverride>();
+    app.init_resource::<TapBuffer>();
 
     let auth = Authentication::Manual {
         server_addr: config.server_addr,
@@ -111,7 +121,13 @@ pub fn build_client_app(config: ClientConfig) -> App {
         app.add_systems(Startup, setup_scene);
         app.add_systems(
             Update,
-            (draw_grid, draw_ships, draw_bullets, camera_follow),
+            (
+                accumulate_taps,
+                draw_grid,
+                draw_ships,
+                draw_bullets,
+                camera_follow,
+            ),
         );
     }
     app
@@ -141,6 +157,15 @@ fn handle_controlled_spawn(
     }
 }
 
+/// Catch `just_pressed` edges at render rate (there can be many frames per
+/// simulation tick) so quick taps survive until the next fixed tick samples
+/// them.
+fn accumulate_taps(mut taps: ResMut<TapBuffer>, keypress: Res<ButtonInput<KeyCode>>) {
+    if keypress.just_pressed(KeyCode::Space) {
+        taps.fire = true;
+    }
+}
+
 /// Sample the input source once per tick into the lightyear input buffer.
 /// Priority: scripted override (tests) > bot mode > keyboard. In headless
 /// mode there is no `ButtonInput` resource, so the keyboard branch is skipped.
@@ -149,6 +174,7 @@ fn buffer_input(
     keypress: Option<Res<ButtonInput<KeyCode>>>,
     bot: Res<BotMode>,
     scripted: Res<InputOverride>,
+    mut taps: ResMut<TapBuffer>,
 ) {
     let Ok(mut action_state) = query.single_mut() else {
         return;
@@ -172,15 +198,19 @@ fn buffer_input(
     if keypress.pressed(KeyCode::KeyW) || keypress.pressed(KeyCode::ArrowUp) {
         input.thrust = true;
     }
+    if keypress.pressed(KeyCode::KeyS) || keypress.pressed(KeyCode::ArrowDown) {
+        input.brake = true;
+    }
     if keypress.pressed(KeyCode::KeyA) || keypress.pressed(KeyCode::ArrowLeft) {
         input.turn_left = true;
     }
     if keypress.pressed(KeyCode::KeyD) || keypress.pressed(KeyCode::ArrowRight) {
         input.turn_right = true;
     }
-    if keypress.pressed(KeyCode::Space) {
+    if keypress.pressed(KeyCode::Space) || taps.fire {
         input.fire = true;
     }
+    taps.fire = false;
     action_state.0 = Inputs(input);
 }
 
