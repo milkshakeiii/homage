@@ -198,6 +198,39 @@ impl TestNet {
         }
     }
 
+    /// Send a spawn order (next-hull choice) from a client, as the respawn
+    /// menu would.
+    pub fn client_send_spawn_order(&mut self, client_idx: usize, hull: HullKind) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<SpawnOrder>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(SpawnOrder { hull });
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
+    }
+
+    /// Which hull a client's server-side ship currently is.
+    pub fn server_ship_hull(&mut self, client_id: u64) -> Option<HullKind> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &HullKind)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, kind)| *kind)
+    }
+
+    /// Overwrite a player's bank server-side.
+    pub fn set_bank(&mut self, client_id: u64, amount: u32) {
+        self.server
+            .world_mut()
+            .resource_mut::<homage_server::Banks>()
+            .0
+            .insert(PeerId::Netcode(client_id), amount);
+    }
+
     /// Server-authoritative bank balance for a client.
     pub fn server_bank(&mut self, client_id: u64) -> u32 {
         self.server

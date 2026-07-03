@@ -14,7 +14,7 @@ use bevy::winit::WinitSettings;
 use core::net::{Ipv4Addr, SocketAddr};
 use core::time::Duration;
 use homage_shared::protocol::*;
-use homage_shared::sim;
+use homage_shared::{hulls, sim};
 use homage_shared::SharedPlugin;
 use homage_shared::{FIXED_TIMESTEP_HZ, PRIVATE_KEY, PROTOCOL_ID};
 use lightyear::frame_interpolation::prelude::*;
@@ -161,7 +161,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     if !config.headless {
         app.add_plugins(juice::JuicePlugin);
         app.add_systems(Startup, (setup_scene, setup_hud));
-        app.add_systems(Update, (accumulate_taps, update_hud));
+        app.add_systems(Update, (accumulate_taps, update_hud, respawn_menu));
         app.add_systems(
             PostUpdate,
             (
@@ -230,7 +230,7 @@ fn add_frame_interpolation<M: Component>(trigger: On<Add, M>, mut commands: Comm
 
 fn add_predicted_ship_physics(
     ships: Query<
-        Entity,
+        (Entity, &HullKind),
         (
             With<PlayerId>,
             With<Predicted>,
@@ -239,8 +239,8 @@ fn add_predicted_ship_physics(
     >,
     mut commands: Commands,
 ) {
-    for entity in &ships {
-        commands.entity(entity).try_insert(sim::ship_physics());
+    for (entity, kind) in &ships {
+        commands.entity(entity).try_insert(sim::ship_physics(*kind));
     }
 }
 
@@ -277,6 +277,10 @@ fn setup_scene(mut commands: Commands) {
 #[derive(Component)]
 struct HudText;
 
+/// Marker for the death/respawn hull-selection menu.
+#[derive(Component)]
+struct RespawnMenuText;
+
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         HudText,
@@ -293,6 +297,70 @@ fn setup_hud(mut commands: Commands) {
             ..default()
         },
     ));
+    commands.spawn((
+        RespawnMenuText,
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(24.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.95, 0.95, 0.95)),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(38.0),
+            width: Val::Percent(100.0),
+            ..default()
+        },
+        Visibility::Hidden,
+    ));
+}
+
+/// While dead: show the hull menu and let number keys pick what to fly next.
+/// The choice is sent as a reliable SpawnOrder and applied (and paid for)
+/// when the respawn happens server-side.
+fn respawn_menu(
+    keys: Res<ButtonInput<KeyCode>>,
+    alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
+    mut menu: Query<(&mut Visibility, &mut Text), With<RespawnMenuText>>,
+    mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
+    mut chosen: Local<Option<HullKind>>,
+) {
+    let Ok((mut visibility, mut text)) = menu.single_mut() else {
+        return;
+    };
+    if !alive.is_empty() {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Visible;
+
+    let picked = if keys.just_pressed(KeyCode::Digit1) {
+        Some(hulls::PURCHASABLE[0])
+    } else if keys.just_pressed(KeyCode::Digit2) {
+        Some(hulls::PURCHASABLE[1])
+    } else {
+        None
+    };
+    if let Some(hull) = picked {
+        *chosen = Some(hull);
+        if let Ok(mut sender) = sender.single_mut() {
+            sender.send::<OrdersChannel>(SpawnOrder { hull });
+        }
+    }
+
+    let mut options = String::new();
+    for (i, kind) in hulls::PURCHASABLE.iter().enumerate() {
+        let stats = hulls::stats(*kind);
+        let cost = if stats.cost == 0 {
+            "free".to_string()
+        } else {
+            format!("{} ore", stats.cost)
+        };
+        options.push_str(&format!("[{}] {} ({cost})   ", i + 1, hulls::display_name(*kind)));
+    }
+    let next = hulls::display_name(chosen.unwrap_or(HullKind::Fighter));
+    text.0 = format!("SHIP DESTROYED\n{options}\nNext spawn: {next}");
 }
 
 fn log_hud_layout(
@@ -453,6 +521,7 @@ fn draw_ships(
             &Position,
             &Rotation,
             &PlayerColor,
+            Option<&HullKind>,
             Option<&Health>,
             Option<&CargoHold>,
             Option<&juice::FlashUntil>,
@@ -460,13 +529,15 @@ fn draw_ships(
         (With<PlayerId>, Or<(With<Predicted>, With<Interpolated>)>),
     >,
 ) {
-    for (position, rotation, color, health, cargo, flash) in &ships {
+    for (position, rotation, color, kind, health, cargo, flash) in &ships {
+        let stats = hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
+        let (length, width) = (stats.length, stats.width);
         let flashing = flash.is_some_and(|f| time.elapsed_secs() < f.0);
         let draw_color = if flashing { Color::WHITE } else { color.0 };
         let pos = position.0;
-        let nose = pos + *rotation * Vec2::new(sim::SHIP_LENGTH / 2.0, 0.0);
-        let left = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, sim::SHIP_WIDTH / 2.0);
-        let right = pos + *rotation * Vec2::new(-sim::SHIP_LENGTH / 2.0, -sim::SHIP_WIDTH / 2.0);
+        let nose = pos + *rotation * Vec2::new(length / 2.0, 0.0);
+        let left = pos + *rotation * Vec2::new(-length / 2.0, width / 2.0);
+        let right = pos + *rotation * Vec2::new(-length / 2.0, -width / 2.0);
         gizmos.linestrip_2d([nose, left, right, nose], draw_color);
         if flashing {
             // Second, slightly larger outline so the flash pops at a glance.
@@ -479,11 +550,11 @@ fn draw_ships(
 
         if let Some(health) = health {
             let fraction = health.current as f32 / health.max as f32;
-            let half_width = sim::SHIP_LENGTH / 2.0;
-            let y = sim::SHIP_LENGTH / 2.0 + 8.0;
+            let half_width = length / 2.0;
+            let y = length / 2.0 + 8.0;
             gizmos.line_2d(
                 pos + Vec2::new(-half_width, y),
-                pos + Vec2::new(-half_width + sim::SHIP_LENGTH * fraction, y),
+                pos + Vec2::new(-half_width + length * fraction, y),
                 Color::srgb(0.2, 1.0, 0.2),
             );
         }
@@ -491,11 +562,11 @@ fn draw_ships(
         if let Some(cargo) = cargo {
             if cargo.current > 0 {
                 let fraction = cargo.load_fraction();
-                let half_width = sim::SHIP_LENGTH / 2.0;
-                let y = sim::SHIP_LENGTH / 2.0 + 4.0;
+                let half_width = length / 2.0;
+                let y = length / 2.0 + 4.0;
                 gizmos.line_2d(
                     pos + Vec2::new(-half_width, y),
-                    pos + Vec2::new(-half_width + sim::SHIP_LENGTH * fraction, y),
+                    pos + Vec2::new(-half_width + length * fraction, y),
                     Color::srgb(1.0, 0.85, 0.3),
                 );
             }

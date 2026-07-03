@@ -195,12 +195,13 @@ fn ensure_trails(
 /// replicate their inputs, and speed is honest data).
 fn update_trails(
     time: Res<Time>,
-    mut ships: Query<(&Position, &Rotation, &LinearVelocity, &mut Trail)>,
+    mut ships: Query<(&Position, &Rotation, &LinearVelocity, Option<&HullKind>, &mut Trail)>,
 ) {
     let now = time.elapsed_secs();
-    for (position, rotation, velocity, mut trail) in &mut ships {
+    for (position, rotation, velocity, kind, mut trail) in &mut ships {
+        let length = homage_shared::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter)).length;
         if velocity.0.length() > TRAIL_MIN_SPEED {
-            let tail = position.0 - (*rotation * Vec2::X) * (sim::SHIP_LENGTH * 0.5);
+            let tail = position.0 - (*rotation * Vec2::X) * (length * 0.5);
             trail.points.push_back((tail, now));
         }
         while trail

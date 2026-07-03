@@ -101,6 +101,25 @@ pub struct OreFragment {
     pub value: u16,
 }
 
+/// Which hull a ship is. Stats live in `crate::hulls`; this replicates so
+/// both sides simulate and render the right hull.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HullKind {
+    Fighter,
+    Harvester,
+}
+
+/// Client → server: what to fly on the next (re)spawn. Applied when the
+/// respawn happens; costs are deducted then (hulls are lost on death,
+/// DESIGN §6).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SpawnOrder {
+    pub hull: HullKind,
+}
+
+/// Reliable channel for player orders (spawn requests, later: build orders).
+pub struct OrdersChannel;
+
 /// Undeposited ore aboard a ship. Server-authoritative; carried mass
 /// degrades handling (see shared sim).
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -212,9 +231,22 @@ impl Plugin for ProtocolPlugin {
             },
         });
 
+        // Both the channel and the message need the direction: the channel
+        // direction wires the channel into each link's Transport (without it,
+        // sends fail with ChannelNotFound); the message direction adds the
+        // MessageSender/MessageReceiver components to the link entities.
+        app.add_channel::<OrdersChannel>(ChannelSettings {
+            mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+            ..default()
+        })
+        .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SpawnOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
+
         app.component::<Name>().replicate();
         app.component::<PlayerId>().replicate();
         app.component::<Team>().replicate();
+        app.component::<HullKind>().replicate();
         app.component::<Mothership>().replicate();
         app.component::<PlayerColor>().replicate();
         app.component::<Health>().replicate();

@@ -2,6 +2,7 @@
 //! the avian physics setup, and the ship/bullet simulation that must run
 //! identically on both sides for prediction to work.
 
+pub mod hulls;
 pub mod protocol;
 pub mod sim;
 

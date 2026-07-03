@@ -18,7 +18,7 @@ use bevy::state::app::StatesPlugin;
 use core::net::SocketAddr;
 use core::time::Duration;
 use homage_shared::protocol::*;
-use homage_shared::{sim, SharedPlugin};
+use homage_shared::{hulls, sim, SharedPlugin};
 use homage_shared::{FIXED_TIMESTEP_HZ, PRIVATE_KEY, PROTOCOL_ID, SEND_INTERVAL};
 use lightyear::connection::client::Connected;
 use lightyear::connection::client_of::ClientOf;
@@ -31,9 +31,6 @@ use std::collections::VecDeque;
 /// How many ticks of ship positions to keep for lag compensation.
 /// 35 ticks is ~550ms at 64Hz — enough to cover typical interpolation delays.
 const LAG_COMP_HISTORY_TICKS: usize = 35;
-/// Ships are hit-tested as circles for rewind purposes (the visual is a
-/// 32x19 triangle; a 12-unit circle is a fair middle ground).
-const SHIP_HIT_RADIUS: f32 = 12.0;
 
 /// Ring buffer of recent post-physics ship positions, for rewinding.
 #[derive(Component, Default)]
@@ -77,6 +74,11 @@ struct TeamAssignments(std::collections::HashMap<PeerId, Team>);
 /// never lost); mirrored onto each ship's `Bank` component for replication.
 #[derive(Resource, Default)]
 pub struct Banks(pub std::collections::HashMap<PeerId, u32>);
+
+/// What each player wants to fly on their next spawn (from SpawnOrder
+/// messages). Costs are checked and deducted at spawn time.
+#[derive(Resource, Default)]
+struct SpawnChoices(std::collections::HashMap<PeerId, HullKind>);
 
 impl TeamAssignments {
     /// Existing assignment, or the team with fewer assigned players.
@@ -156,11 +158,13 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.insert_resource(ListenAddr(addr));
     app.init_resource::<TeamAssignments>();
     app.init_resource::<Banks>();
+    app.init_resource::<SpawnChoices>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     app.add_systems(
         FixedUpdate,
         (
+            receive_spawn_orders,
             hit_detection,
             asteroid_hit_detection,
             scoop_fragments,
@@ -407,13 +411,41 @@ fn handle_connected(
     };
     let team = teams.assign(client_id.0);
     let bank = banks.0.get(&client_id.0).copied().unwrap_or(0);
-    spawn_ship(&mut commands, client_id.0, team, bank, trigger.entity);
+    // First spawn is always the free fighter; purchases apply on respawn.
+    spawn_ship(
+        &mut commands,
+        client_id.0,
+        team,
+        HullKind::Fighter,
+        bank,
+        trigger.entity,
+    );
 }
 
-fn spawn_ship(commands: &mut Commands, client_id: PeerId, team: Team, bank: u32, link: Entity) {
+/// Drain SpawnOrder messages into each player's standing choice.
+fn receive_spawn_orders(
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<SpawnOrder>), With<ClientOf>>,
+    mut choices: ResMut<SpawnChoices>,
+) {
+    for (client_id, mut receiver) in &mut receivers {
+        for order in receiver.receive() {
+            info!("{:?} wants to spawn as {:?}", client_id.0, order.hull);
+            choices.0.insert(client_id.0, order.hull);
+        }
+    }
+}
+
+fn spawn_ship(
+    commands: &mut Commands,
+    client_id: PeerId,
+    team: Team,
+    kind: HullKind,
+    bank: u32,
+    link: Entity,
+) {
     let entity = commands
         .spawn((
-            sim::ship_bundle(client_id, team),
+            sim::ship_bundle(client_id, team, kind),
             Bank(bank),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
@@ -425,7 +457,7 @@ fn spawn_ship(commands: &mut Commands, client_id: PeerId, team: Team, bank: u32,
             },
         ))
         .id();
-    info!("Spawned ship {entity:?} for client {client_id:?} on {team:?}");
+    info!("Spawned {kind:?} {entity:?} for client {client_id:?} on {team:?}");
 }
 
 fn record_pose_history(
@@ -464,6 +496,7 @@ fn hit_detection(
         &Team,
         &Position,
         &ShipPoseHistory,
+        Option<&HullKind>,
         Option<&CargoHold>,
         &mut Health,
     )>,
@@ -489,15 +522,18 @@ fn hit_detection(
         let seg_start = position.0;
         let seg_end = position.0 + velocity.0 * sim::TICK_DT;
 
-        // No friendly fire: bullets only connect with the other team.
+        // No friendly fire: bullets only connect with the other team. Hit
+        // circles are per-hull (a harvester is a much fatter target than a
+        // fighter).
         let hit_target = targets
             .iter()
-            .find_map(|(entity, id, team, _, history, _, _)| {
+            .find_map(|(entity, id, team, _, history, kind, _, _)| {
                 if id.0 == marker.owner || *team == shooter_team {
                     return None;
                 }
+                let radius = hulls::stats(kind.copied().unwrap_or(HullKind::Fighter)).hit_radius;
                 let center = history.sample(rewind_tick, overstep)?;
-                segment_hits_circle(seg_start, seg_end, center, SHIP_HIT_RADIUS + sim::BULLET_SIZE)
+                segment_hits_circle(seg_start, seg_end, center, radius + sim::BULLET_SIZE)
                     .then_some(entity)
             });
         let Some(target) = hit_target else {
@@ -505,7 +541,7 @@ fn hit_detection(
         };
 
         commands.entity(bullet_entity).try_despawn();
-        let Ok((_, target_id, _, target_pos, _, cargo, mut health)) = targets.get_mut(target)
+        let Ok((_, target_id, _, target_pos, _, _, cargo, mut health)) = targets.get_mut(target)
         else {
             continue;
         };
@@ -556,7 +592,8 @@ fn respawn_ships(
     mut tasks: Query<(Entity, &mut RespawnTask)>,
     links: Query<(), With<ClientOf>>,
     mut teams: ResMut<TeamAssignments>,
-    banks: Res<Banks>,
+    mut banks: ResMut<Banks>,
+    choices: Res<SpawnChoices>,
 ) {
     for (entity, mut task) in &mut tasks {
         task.ticks_remaining -= 1;
@@ -566,10 +603,25 @@ fn respawn_ships(
         commands.entity(entity).despawn();
         // Skip the respawn if the client disconnected while dead.
         if links.get(task.link).is_ok() {
-            info!("Respawning ship for {:?}", task.client_id);
             let team = teams.assign(task.client_id);
-            let bank = banks.0.get(&task.client_id).copied().unwrap_or(0);
-            spawn_ship(&mut commands, task.client_id, team, bank, task.link);
+            // Buy the requested hull if the bank covers it; hulls are lost
+            // on death, so every non-free spawn is a fresh purchase
+            // (DESIGN §6). Broke players fall back to the free fighter.
+            let desired = choices
+                .0
+                .get(&task.client_id)
+                .copied()
+                .unwrap_or(HullKind::Fighter);
+            let bank = banks.0.entry(task.client_id).or_insert(0);
+            let cost = hulls::stats(desired).cost;
+            let kind = if *bank >= cost {
+                *bank -= cost;
+                desired
+            } else {
+                HullKind::Fighter
+            };
+            info!("Respawning {:?} as {kind:?}", task.client_id);
+            spawn_ship(&mut commands, task.client_id, team, kind, *bank, task.link);
         }
     }
 }

@@ -86,11 +86,12 @@ pub fn team_anchor(team: Team) -> Vec2 {
 }
 
 /// Ships face +X at zero rotation.
-fn ship_collider() -> Collider {
+fn ship_collider(kind: HullKind) -> Collider {
+    let stats = crate::hulls::stats(kind);
     Collider::convex_hull(vec![
-        Vec2::new(SHIP_LENGTH / 2.0, 0.0),
-        Vec2::new(-SHIP_LENGTH / 2.0, SHIP_WIDTH / 2.0),
-        Vec2::new(-SHIP_LENGTH / 2.0, -SHIP_WIDTH / 2.0),
+        Vec2::new(stats.length / 2.0, 0.0),
+        Vec2::new(-stats.length / 2.0, stats.width / 2.0),
+        Vec2::new(-stats.length / 2.0, -stats.width / 2.0),
     ])
     .expect("ship collider hull")
 }
@@ -100,10 +101,10 @@ fn ship_collider() -> Collider {
 /// components aren't replicated, and without a RigidBody avian never
 /// integrates the predicted ship's position — prediction degrades to
 /// snapping to server updates.
-pub fn ship_physics() -> impl Bundle {
+pub fn ship_physics(kind: HullKind) -> impl Bundle {
     (
         RigidBody::Dynamic,
-        ship_collider(),
+        ship_collider(kind),
         ColliderDensity(1.0),
         LinearDamping(SHIP_DAMPING),
     )
@@ -123,19 +124,25 @@ pub fn spawn_pose(client_id: PeerId, team: Team) -> (Position, Rotation) {
 
 /// Everything a ship needs on the server; replication/prediction targets are
 /// added separately by the server.
-pub fn ship_bundle(client_id: PeerId, team: Team) -> impl Bundle {
+pub fn ship_bundle(client_id: PeerId, team: Team, kind: HullKind) -> impl Bundle {
+    let stats = crate::hulls::stats(kind);
+    let weapon = stats.weapon.unwrap_or(crate::hulls::WeaponStats {
+        cooldown_ticks: u16::MAX,
+        bullet_speed: 0.0,
+    });
     let (position, rotation) = spawn_pose(client_id, team);
     (
         PlayerId(client_id),
         team,
+        kind,
         PlayerColor(color_from_id(client_id, team)),
-        Health::new(SHIP_HEALTH),
-        Weapon::new(FIRE_COOLDOWN_TICKS, BULLET_SPEED),
-        CargoHold::empty(FIGHTER_CARGO_CAPACITY),
+        Health::new(stats.health),
+        Weapon::new(weapon.cooldown_ticks, weapon.bullet_speed),
+        CargoHold::empty(stats.cargo_capacity),
         position,
         rotation,
-        ship_physics(),
-        Name::from("Ship"),
+        ship_physics(kind),
+        Name::from(crate::hulls::display_name(kind)),
     )
 }
 
@@ -214,15 +221,17 @@ pub fn player_movement(
             &mut LinearVelocity,
             &mut AngularVelocity,
             Option<&CargoHold>,
+            Option<&HullKind>,
         ),
         With<PlayerId>,
     >,
 ) {
-    for (action_state, rotation, mut linvel, mut angvel, cargo) in &mut query {
+    for (action_state, rotation, mut linvel, mut angvel, cargo, kind) in &mut query {
+        let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let input = &action_state.0 .0;
         let load = cargo.map_or(0.0, CargoHold::load_fraction);
         if input.thrust {
-            let accel = THRUST_ACCEL * (1.0 - CARGO_ACCEL_PENALTY * load);
+            let accel = stats.accel * (1.0 - CARGO_ACCEL_PENALTY * load);
             linvel.0 += *rotation * Vec2::X * accel * TICK_DT;
         }
         // Brake opposes the velocity vector regardless of facing: a recovery
@@ -230,7 +239,7 @@ pub fn player_movement(
         // faster, skillful option (skill ceiling).
         if input.brake {
             let speed = linvel.0.length();
-            let decel = BRAKE_DECEL * TICK_DT;
+            let decel = stats.brake * TICK_DT;
             linvel.0 = if decel >= speed {
                 Vec2::ZERO
             } else {
@@ -238,9 +247,9 @@ pub fn player_movement(
             };
         }
         let desired_ang_vel = if input.turn_left {
-            TURN_SPEED
+            stats.turn_speed
         } else if input.turn_right {
-            -TURN_SPEED
+            -stats.turn_speed
         } else {
             0.0
         };
@@ -252,11 +261,15 @@ pub fn player_movement(
 
 /// Asteroids-style speed cap on top of damping; a loaded hold lowers the cap.
 pub fn clamp_ship_speed(
-    mut query: Query<(&mut LinearVelocity, Option<&CargoHold>), With<PlayerId>>,
+    mut query: Query<
+        (&mut LinearVelocity, Option<&CargoHold>, Option<&HullKind>),
+        With<PlayerId>,
+    >,
 ) {
-    for (mut velocity, cargo) in &mut query {
+    for (mut velocity, cargo, kind) in &mut query {
+        let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let load = cargo.map_or(0.0, CargoHold::load_fraction);
-        let max = MAX_SPEED * (1.0 - CARGO_SPEED_PENALTY * load);
+        let max = stats.max_speed * (1.0 - CARGO_SPEED_PENALTY * load);
         if velocity.0.length_squared() > max * max {
             velocity.0 = velocity.0.normalize() * max;
         }
@@ -290,6 +303,7 @@ pub fn shared_player_firing(
         &LinearVelocity,
         &PlayerColor,
         &PlayerId,
+        Option<&HullKind>,
         &ActionState<Inputs>,
         &mut Weapon,
         Has<Predicted>,
@@ -311,6 +325,7 @@ pub fn shared_player_firing(
         velocity,
         color,
         player_id,
+        kind,
         action_state,
         mut weapon,
         is_predicted,
@@ -348,8 +363,9 @@ pub fn shared_player_firing(
         weapon.fire_requested = None;
 
         // The bullet spawns off the nose and inherits the ship's velocity.
+        let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let forward = *rotation * Vec2::X;
-        let origin = position.0 + forward * (SHIP_LENGTH / 2.0 + BULLET_SIZE + 2.0);
+        let origin = position.0 + forward * (stats.length / 2.0 + BULLET_SIZE + 2.0);
         let bullet_velocity = forward * weapon.bullet_speed + velocity.0;
 
         let bullet = commands
