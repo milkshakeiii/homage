@@ -223,6 +223,29 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
     }
 
+    /// Toggle a client's automatic spawn confirmation (headless clients
+    /// default to true so kill/respawn flows behave like the old
+    /// auto-respawn).
+    pub fn set_auto_spawn(&mut self, client_idx: usize, enabled: bool) {
+        self.clients[client_idx]
+            .world_mut()
+            .resource_mut::<homage_client::AutoSpawn>()
+            .0 = enabled;
+    }
+
+    /// Send an explicit spawn confirmation (the map click).
+    pub fn client_send_spawn_confirm(&mut self, client_idx: usize) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<SpawnConfirm>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(SpawnConfirm);
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<SpawnConfirm> on the client entity");
+    }
+
     /// Send a dev cheat from a client, as the F-keys would.
     pub fn client_send_cheat(&mut self, client_idx: usize, cheat: CheatOrder) {
         let world = self.clients[client_idx].world_mut();

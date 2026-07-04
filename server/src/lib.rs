@@ -56,12 +56,15 @@ impl ShipPoseHistory {
     }
 }
 
-/// Server-local countdown to bring a dead player's ship back.
+/// Server-local respawn state: the countdown is the EARLIEST spawn moment;
+/// the actual spawn waits for the player's SpawnConfirm (the map click on
+/// the spawn screen). Early confirms are remembered.
 #[derive(Component)]
 struct RespawnTask {
     client_id: PeerId,
     link: Entity,
     ticks_remaining: i32,
+    confirmed: bool,
 }
 
 /// Which team each known player is on. Assignments persist through death and
@@ -194,7 +197,12 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     // frame, masking the race).
     app.add_systems(
         Update,
-        (receive_spawn_orders, receive_self_destructs, receive_cheats),
+        (
+            receive_spawn_orders,
+            receive_spawn_confirms,
+            receive_self_destructs,
+            receive_cheats,
+        ),
     );
     app.add_systems(
         FixedUpdate,
@@ -502,6 +510,23 @@ fn scatter_cargo(commands: &mut Commands, position: Vec2, amount: u16, tick: Tic
     }
 }
 
+/// Mark a dead player's respawn as confirmed (their map click). Spawning
+/// happens in respawn_ships once the delay has also elapsed.
+fn receive_spawn_confirms(
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<SpawnConfirm>), With<ClientOf>>,
+    mut tasks: Query<&mut RespawnTask>,
+) {
+    for (client_id, mut receiver) in &mut receivers {
+        for _ in receiver.receive() {
+            for mut task in &mut tasks {
+                if task.client_id == client_id.0 {
+                    task.confirmed = true;
+                }
+            }
+        }
+    }
+}
+
 /// Dev cheats (manual-testing aids; strip or gate before public builds).
 #[allow(clippy::too_many_arguments)]
 fn receive_cheats(
@@ -615,6 +640,7 @@ fn receive_self_destructs(
                 client_id: client_id.0,
                 link: controlled_by.owner,
                 ticks_remaining: sim::RESPAWN_DELAY_TICKS,
+                confirmed: false,
             });
         }
     }
@@ -764,6 +790,7 @@ fn hit_detection(
                     client_id: target_id,
                     link,
                     ticks_remaining: sim::RESPAWN_DELAY_TICKS,
+                    confirmed: false,
                 });
             }
         }
@@ -782,7 +809,7 @@ fn respawn_ships(
 ) {
     for (entity, mut task) in &mut tasks {
         task.ticks_remaining -= 1;
-        if task.ticks_remaining > 0 {
+        if task.ticks_remaining > 0 || !task.confirmed {
             continue;
         }
         commands.entity(entity).despawn();

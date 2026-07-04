@@ -6,6 +6,7 @@
 //! MinimalPlugins and skips the rendering systems.
 
 pub mod juice;
+pub mod spawn_screen;
 
 use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
@@ -32,6 +33,9 @@ pub struct ClientConfig {
     pub bot: bool,
     /// No window, no rendering; driven by manual `App::update()` calls.
     pub headless: bool,
+    /// Confirm respawns automatically instead of via the spawn screen
+    /// (bots and headless test clients).
+    pub auto_spawn: bool,
 }
 
 impl ClientConfig {
@@ -41,9 +45,14 @@ impl ClientConfig {
             server_addr,
             bot: false,
             headless: true,
+            auto_spawn: true,
         }
     }
 }
+
+/// See ClientConfig::auto_spawn; a resource so tests can flip it.
+#[derive(Resource)]
+pub struct AutoSpawn(pub bool);
 
 /// When true, the client ignores the keyboard and constantly thrusts, turns,
 /// and fires — a self-driving client for testing without a human.
@@ -102,6 +111,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     });
     app.add_plugins(SharedPlugin);
     app.insert_resource(BotMode(config.bot));
+    app.insert_resource(AutoSpawn(config.auto_spawn || config.bot));
     app.init_resource::<InputOverride>();
     app.init_resource::<TapBuffer>();
     app.init_resource::<MouseWorld>();
@@ -130,6 +140,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     ));
 
     app.add_systems(Startup, connect);
+    app.add_systems(Update, auto_confirm_spawn);
     app.add_systems(
         FixedPreUpdate,
         buffer_input.in_set(InputSystems::WriteClientInputs),
@@ -176,7 +187,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.add_systems(Update, add_structure_colliders);
 
     if !config.headless {
-        app.add_plugins(juice::JuicePlugin);
+        app.add_plugins((juice::JuicePlugin, spawn_screen::SpawnScreenPlugin));
         app.add_systems(Startup, (setup_scene, setup_hud));
         app.init_resource::<SelfDestructHold>();
         app.add_systems(
@@ -187,7 +198,6 @@ pub fn build_client_app(config: ClientConfig) -> App {
                 self_destruct,
                 send_cheats,
                 update_hud,
-                respawn_menu,
             ),
         );
         app.add_systems(
@@ -306,10 +316,6 @@ fn setup_scene(mut commands: Commands) {
 #[derive(Component)]
 struct HudText;
 
-/// Marker for the death/respawn hull-selection menu.
-#[derive(Component)]
-struct RespawnMenuText;
-
 fn setup_hud(mut commands: Commands) {
     commands.spawn((
         HudText,
@@ -326,179 +332,8 @@ fn setup_hud(mut commands: Commands) {
             ..default()
         },
     ));
-    commands.spawn((
-        RespawnMenuText,
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(24.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.95, 0.95, 0.95)),
-        TextLayout::justify(Justify::Center),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Percent(38.0),
-            width: Val::Percent(100.0),
-            ..default()
-        },
-        Visibility::Hidden,
-    ));
 }
 
-/// While dead: show the hull menu, digit keys pick what to fly next, and Tab
-/// cycles which friendly facility (mothership / strike carrier) to spawn at.
-/// The choice is sent as a reliable SpawnOrder and applied (and paid for)
-/// when the respawn happens server-side.
-fn respawn_menu(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    alive: Query<&Team, (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
-    // lightyear 0.28 single-entity model: the interpolated/predicted entity
-    // IS the replicated one, so these entities map correctly in messages.
-    fleet: Query<(Entity, &Team, &HullKind, &PlayerId)>,
-    motherships: Query<(Entity, &Team), With<Mothership>>,
-    mut menu: Query<(&mut Visibility, &mut Text), With<RespawnMenuText>>,
-    mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
-    mut chosen: Local<Option<HullKind>>,
-    mut chosen_facility: Local<Option<Entity>>,
-    mut own_team: Local<Option<Team>>,
-    mut died_at: Local<Option<f32>>,
-) {
-    let Ok((mut visibility, mut text)) = menu.single_mut() else {
-        return;
-    };
-    if let Ok(team) = alive.single() {
-        *own_team = Some(*team);
-        *died_at = None;
-        *visibility = Visibility::Hidden;
-        return;
-    }
-    *visibility = Visibility::Visible;
-    let now = time.elapsed_secs();
-    let died = *died_at.get_or_insert(now);
-    // Client-side estimate of the server's respawn timer (close enough for
-    // UI; the server is authoritative).
-    let respawn_in =
-        (sim::RESPAWN_DELAY_TICKS as f32 * sim::TICK_DT - (now - died)).max(0.0);
-    let mine = *own_team;
-    let friendly_carriers: Vec<(Entity, u64)> = mine
-        .map(|mine| {
-            let mut carriers: Vec<(Entity, u64)> = fleet
-                .iter()
-                .filter(|(_, team, kind, _)| {
-                    **team == mine && **kind == HullKind::StrikeCarrier
-                })
-                .map(|(entity, _, _, owner)| (entity, owner.0.to_bits()))
-                .collect();
-            carriers.sort_by_key(|(_, owner)| *owner);
-            carriers
-        })
-        .unwrap_or_default();
-    let have_carrier = !friendly_carriers.is_empty();
-
-    const DIGITS: [KeyCode; 9] = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
-    let picked = DIGITS
-        .iter()
-        .position(|key| keys.just_pressed(*key))
-        .and_then(|i| hulls::PURCHASABLE.get(i).copied());
-
-    // Eligible facilities for the current hull class, in stable order:
-    // mothership first (when allowed), then carriers by owner id.
-    let hull = picked.or(*chosen).unwrap_or(HullKind::Fighter);
-    let friendly_mothership = mine.and_then(|mine| {
-        motherships
-            .iter()
-            .find(|(_, team)| **team == mine)
-            .map(|(entity, _)| entity)
-    });
-    let mut eligible: Vec<(Entity, String)> = Vec::new();
-    match hulls::class(hull) {
-        hulls::HullClass::CarrierType => {
-            if let Some(m) = friendly_mothership {
-                eligible.push((m, "Mothership".into()));
-            }
-        }
-        hulls::HullClass::Combat => {
-            for (entity, owner) in &friendly_carriers {
-                eligible.push((*entity, format!("Carrier [{owner}]")));
-            }
-        }
-        hulls::HullClass::Economy => {
-            if let Some(m) = friendly_mothership {
-                eligible.push((m, "Mothership".into()));
-            }
-            for (entity, owner) in &friendly_carriers {
-                eligible.push((*entity, format!("Carrier [{owner}]")));
-            }
-        }
-    }
-
-    // Keep the current selection if still eligible, else take the first.
-    let mut index = eligible
-        .iter()
-        .position(|(e, _)| Some(*e) == *chosen_facility)
-        .unwrap_or(0);
-    let tabbed = keys.just_pressed(KeyCode::Tab) && !eligible.is_empty();
-    if tabbed {
-        index = (index + 1) % eligible.len();
-    }
-    let selection = eligible.get(index);
-    let selection_changed = selection.map(|(e, _)| *e) != *chosen_facility;
-    *chosen_facility = selection.map(|(e, _)| *e);
-
-    if picked.is_some() || tabbed || selection_changed {
-        *chosen = Some(hull);
-        if let Ok(mut sender) = sender.single_mut() {
-            sender.send::<OrdersChannel>(SpawnOrder {
-                hull,
-                spawn_at: *chosen_facility,
-            });
-        }
-    }
-
-    let mut options = String::new();
-    for (i, kind) in hulls::PURCHASABLE.iter().enumerate() {
-        let stats = hulls::stats(*kind);
-        let cost = if stats.cost == 0 {
-            "free".to_string()
-        } else {
-            format!("{} ore", stats.cost)
-        };
-        let gate = if hulls::class(*kind) == hulls::HullClass::Combat && !have_carrier {
-            " — needs carrier!"
-        } else {
-            ""
-        };
-        options.push_str(&format!(
-            "[{}] {} ({cost}{gate})   ",
-            i + 1,
-            hulls::display_name(*kind)
-        ));
-    }
-    let next = hulls::display_name(chosen.unwrap_or(HullKind::Fighter));
-    let status = if respawn_in > 0.05 {
-        format!("respawning in {respawn_in:.1}s")
-    } else {
-        "respawning…".to_string()
-    };
-    let at = eligible
-        .get(index)
-        .map(|(_, label)| label.as_str())
-        .unwrap_or("—");
-    text.0 = format!(
-        "SHIP DESTROYED — {status}\n{options}\nNext spawn: {next} at {at}   [Tab] cycle spawn point"
-    );
-}
 
 fn log_hud_layout(
     mut ticks: Local<u32>,
@@ -555,6 +390,27 @@ fn update_hud(
     text.0 = format!(
         "Banked: {bank}{earned}   Pts: {points}{points_earned}   Hold: {held}/{capacity}{warning}"
     );
+}
+
+/// Bots and headless clients skip the spawn screen: while dead, confirm the
+/// respawn about once a second (idempotent server-side).
+fn auto_confirm_spawn(
+    time: Res<Time>,
+    mut last_sent: Local<f32>,
+    auto: Res<AutoSpawn>,
+    alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    mut sender: Query<&mut MessageSender<SpawnConfirm>, With<Client>>,
+) {
+    if !auto.0 || !alive.is_empty() {
+        return;
+    }
+    if time.elapsed_secs() - *last_sent < 1.0 {
+        return;
+    }
+    *last_sent = time.elapsed_secs();
+    if let Ok(mut sender) = sender.single_mut() {
+        sender.send::<OrdersChannel>(SpawnConfirm);
+    }
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {

@@ -21,6 +21,7 @@ fn main() {
         server_addr: homage_shared::SERVER_ADDR,
         bot,
         headless: false,
+        auto_spawn: bot,
     })
     .run();
 }

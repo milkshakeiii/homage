@@ -143,6 +143,13 @@ impl MapEntities for SpawnOrder {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SelfDestruct;
 
+/// Client → server: deploy me now (the map-click on the spawn screen). The
+/// server spawns the standing SpawnOrder once the respawn delay has elapsed;
+/// confirms sent early are remembered. Without a confirm the player stays on
+/// the spawn screen indefinitely (Savage-style).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SpawnConfirm;
+
 /// Client → server: dev cheats for manual testing (F-keys on the client).
 /// Always-on during development; must be gated or stripped before any
 /// public-facing build.
@@ -295,6 +302,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer)
             .add_map_entities();
         app.register_message::<SelfDestruct>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SpawnConfirm>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);

@@ -349,3 +349,34 @@ fn corvette_spawns_at_carrier_and_turret_fires_along_aim() {
         net.server_ship(1)
     );
 }
+
+/// The server never auto-respawns: without a SpawnConfirm (the map click)
+/// you stay on the spawn screen indefinitely; the confirm deploys you.
+#[test]
+fn respawn_waits_for_spawn_confirm() {
+    let mut net = TestNet::new(6611, &[1]);
+    assert!(net.run_until(CONNECT_TICKS, |net| net.server_ship(1).is_some()));
+    net.set_auto_spawn(0, false);
+    net.teleport(1, Vec2::new(2500.0, -2500.0), 0.0);
+    net.run_ticks(16);
+
+    net.client_send_self_destruct(0);
+    assert!(
+        net.run_until(256, |net| net.server_ship(1).is_none()),
+        "self-destruct never happened"
+    );
+
+    // Well past the delay: still dead, because nobody clicked deploy.
+    net.run_ticks(sim::RESPAWN_DELAY_TICKS as usize + 512);
+    assert!(
+        net.server_ship(1).is_none(),
+        "server must not auto-respawn without a confirm"
+    );
+
+    // The click deploys promptly (delay already elapsed).
+    net.client_send_spawn_confirm(0);
+    assert!(
+        net.run_until(256, |net| net.server_ship(1).is_some()),
+        "confirm never deployed the ship"
+    );
+}
