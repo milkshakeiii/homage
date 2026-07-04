@@ -314,6 +314,12 @@ holding map features.
   radius move to M3 with fittings.
 - **M3 — points & fittings:** point awards; fitting unlocks; the §5 catalog's
   tier-1 rows plus at least one exclusive tier-2 per slot type.
+- **M3.5 — awareness UI (Henry, 2026-07-03):** corner minimap; hold **M**
+  for a full-screen map (the natural home for the click-to-pick spawn point
+  deferred from M2); hold **Tab** for the traditional scoreboard — both team
+  rosters with K/D and points (needs per-player kill/death counters next to
+  the points ledger). Spawn-facility cycling moves off Tab (to Q/E) when the
+  scoreboard lands.
 - **M4 — win condition & breadth:** mothership HP/kill flow, match reset,
   fleet carrier + outfitter + remaining roster, map balance pass.
 
