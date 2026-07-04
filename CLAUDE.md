@@ -78,8 +78,8 @@ adding a crate to be slow.
 
 ## Process (agreed with Henry)
 
-- Autonomous work happens on the `claude/autonomous-dev` branch, committed in
-  small, frequent commits; merges to `main` go through Henry.
+- Autonomous work happens directly on `main` (Henry, 2026-07-03), committed
+  and pushed in small, frequent commits.
 - Rendering stays gizmo-based placeholder art for now.
 - Tuning numbers in DESIGN.md are placeholders; put actual constants in
   `sim.rs` and expect them to change.
