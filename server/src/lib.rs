@@ -161,11 +161,15 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<SpawnChoices>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
+    // Message drains MUST run in Update: lightyear clears MessageReceiver
+    // buffers every render frame (in Last), and FixedUpdate doesn't run
+    // every frame — draining there silently drops most messages (the e2e
+    // harness can't catch this: manual stepping runs exactly one tick per
+    // frame, masking the race).
+    app.add_systems(Update, (receive_spawn_orders, receive_self_destructs));
     app.add_systems(
         FixedUpdate,
         (
-            receive_spawn_orders,
-            receive_self_destructs,
             hit_detection,
             asteroid_hit_detection,
             scoop_fragments,

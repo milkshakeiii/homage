@@ -30,6 +30,28 @@ pub const PROTOCOL_VERSION: u64 = 2;
 pub const PROTOCOL_ID: u64 = 0x484f_4d41_4745 ^ (PROTOCOL_VERSION << 48); // "HOMAGE" + version
 pub const PRIVATE_KEY: [u8; 32] = [0; 32];
 
+/// Log the net-id tables both sides use on the wire. Separately-built
+/// binaries MUST agree on these; when they don't, messages silently decode
+/// as the wrong type (debugging aid for protocol drift).
+pub fn log_protocol_tables(
+    messages: bevy::ecs::system::Res<lightyear::prelude::MessageRegistry>,
+    channels: bevy::ecs::system::Res<lightyear::prelude::ChannelRegistry>,
+) {
+    for net_id in 0..32u16 {
+        if let Some(kind) = messages.kind_map.kind(net_id) {
+            let name = messages.kind_map.name(kind).unwrap_or("?");
+            bevy::log::info!("PROTOCOL message net_id {net_id} = {name}");
+        }
+    }
+    let channel_map = channels.kind_map();
+    for net_id in 0..32u16 {
+        if let Some(kind) = channel_map.kind(net_id) {
+            let name = channel_map.name(kind).unwrap_or("?");
+            bevy::log::info!("PROTOCOL channel net_id {net_id} = {name}");
+        }
+    }
+}
+
 /// Protocol + physics + shared simulation systems, added by both binaries.
 #[derive(Clone)]
 pub struct SharedPlugin;
@@ -62,6 +84,7 @@ impl Plugin for SharedPlugin {
         );
         app.insert_resource(Gravity(Vec2::ZERO));
 
+        app.add_systems(Startup, log_protocol_tables);
         app.add_systems(
             FixedUpdate,
             (

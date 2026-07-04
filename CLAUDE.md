@@ -64,6 +64,13 @@ adding a crate to be slow.
   changes (components/messages/channels/inputs in `protocol.rs`). Mismatched
   builds then refuse to connect instead of silently dropping unknown
   messages — restart BOTH server and client binaries after pulling.
+- Drain `MessageReceiver<M>` in `Update`, NEVER `FixedUpdate`: lightyear
+  clears receiver buffers every render frame (`Last`), and FixedUpdate skips
+  frames — messages get dropped probabilistically (~75% at the server's
+  256Hz loop / 64Hz tick). The e2e harness CANNOT catch this class of bug
+  (manual time stepping runs exactly one tick per update); message-flow
+  features must also be verified against real binaries (HOMAGE_AUTO_SCUTTLE
+  exists for this).
 - Island sleeping is disabled in avian (incompatible with rollbacks); the
   IslandPlugin itself must stay (see `shared/src/lib.rs`).
 - `app.set_error_handler(bevy::ecs::error::warn)` on the server: ECS command
