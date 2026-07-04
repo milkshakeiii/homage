@@ -335,11 +335,12 @@ fn spawn_asteroid_field(config: Res<AsteroidFieldConfig>, mut commands: Commands
 fn asteroid_hit_detection(
     mut commands: Commands,
     timeline: Res<LocalTimeline>,
-    bullets: Query<(Entity, &Position, &LinearVelocity), With<BulletMarker>>,
+    bullets: Query<(Entity, &Position, &LinearVelocity, &BulletMarker)>,
     mut asteroids: Query<(Entity, &Position, &Asteroid, &mut Health)>,
+    mut points: ResMut<PointsStore>,
 ) {
     let tick = timeline.tick();
-    for (bullet_entity, position, velocity, ..) in &bullets {
+    for (bullet_entity, position, velocity, marker) in &bullets {
         let seg_start = position.0;
         let seg_end = position.0 + velocity.0 * sim::TICK_DT;
         for (asteroid_entity, apos, asteroid, mut health) in &mut asteroids {
@@ -371,6 +372,7 @@ fn asteroid_hit_detection(
                         InterpolationTarget::to_clients(NetworkTarget::All),
                     ));
                 }
+                points.award(marker.owner, sim::asteroid_crack_points(asteroid.radius));
                 info!("Asteroid {asteroid_entity:?} cracked into {count} fragments");
             }
             break;

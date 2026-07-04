@@ -62,6 +62,13 @@ fn shooting_an_asteroid_cracks_it_into_scoopable_fragments() {
         "fragments never replicated; client sees {}",
         net.client_fragment_count(0)
     );
+
+    // Cracking pays points proportional to the ore released.
+    assert_eq!(
+        net.server_points(1),
+        sim::asteroid_crack_points(40.0),
+        "cracking the rock should award points"
+    );
 }
 
 #[test]

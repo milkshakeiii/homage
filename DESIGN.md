@@ -167,8 +167,9 @@ and prediction rollback uniform across archetypes.
 
 **Earning (APPROVED):** points are awarded automatically for team-positive
 actions. First playable set: damage dealt (per point of damage), kill bounties
-(scaled by victim hull class), and resource deposits (so pure haulers level
-too). Later: assists, escort/repair, spawn-hosting as a carrier.
+(scaled by victim hull class), resource deposits (so pure haulers level too),
+and cracking asteroids (proportional to the ore released — Henry, M3). Later:
+assists, escort/repair, spawn-hosting as a carrier.
 
 **Spending (APPROVED):** points buy permanent-for-the-match unlocks of
 fittings — alternate weapons, utility modules, hull mods. Once unlocked, a
