@@ -81,6 +81,30 @@ pub struct Banks(pub std::collections::HashMap<PeerId, u32>);
 #[derive(Resource, Default)]
 struct SpawnChoices(std::collections::HashMap<PeerId, SpawnOrder>);
 
+/// The authoritative points ledger (DESIGN §5), keyed by player so it
+/// survives death like the banks; mirrored onto each ship's `Points`
+/// component by `sync_points`.
+#[derive(Resource, Default)]
+pub struct PointsStore(pub std::collections::HashMap<PeerId, u32>);
+
+impl PointsStore {
+    fn award(&mut self, player: PeerId, amount: u32) {
+        *self.0.entry(player).or_insert(0) += amount;
+    }
+}
+
+/// Mirror the points ledger onto ship components for replication. Runs
+/// unconditionally: respawned ships arrive with Points(0) and need their
+/// persisted total restored even when the ledger itself didn't change.
+fn sync_points(store: Res<PointsStore>, mut ships: Query<(&PlayerId, &mut Points)>) {
+    for (player, mut points) in &mut ships {
+        let total = store.0.get(&player.0).copied().unwrap_or(0);
+        if points.0 != total {
+            points.0 = total;
+        }
+    }
+}
+
 impl TeamAssignments {
     /// Existing assignment, or the team with fewer assigned players.
     fn assign(&mut self, client_id: PeerId) -> Team {
@@ -160,6 +184,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<TeamAssignments>();
     app.init_resource::<Banks>();
     app.init_resource::<SpawnChoices>();
+    app.init_resource::<PointsStore>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     // Message drains MUST run in Update: lightyear clears MessageReceiver
@@ -178,6 +203,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
             asteroid_hit_detection,
             scoop_fragments,
             deposit_cargo,
+            sync_points,
             respawn_ships,
             log_ships,
         )
@@ -363,6 +389,7 @@ fn deposit_cargo(
     motherships: Query<(&Position, &Team), With<Mothership>>,
     controllers: Query<(&Position, &Team, &HullKind), With<PlayerId>>,
     mut ships: Query<(&PlayerId, &Team, &Position, &mut CargoHold, &mut Bank)>,
+    mut points: ResMut<PointsStore>,
 ) {
     if timeline.tick().0 % sim::DEPOSIT_INTERVAL_TICKS as u32 != 0 {
         return;
@@ -389,6 +416,7 @@ fn deposit_cargo(
         let total = banks.0.entry(player.0).or_insert(0);
         *total += 1;
         bank.0 = *total;
+        points.award(player.0, sim::POINTS_PER_ORE_DEPOSITED);
     }
 }
 
@@ -530,6 +558,7 @@ fn receive_cheats(
                             (Position(pos), Rotation::default()),
                         ),
                         Bank(0),
+                        Points(0),
                         ShipPoseHistory::default(),
                         Replicate::to_clients(NetworkTarget::All),
                         InterpolationTarget::to_clients(NetworkTarget::All),
@@ -602,6 +631,7 @@ fn spawn_ship(
         .spawn((
             sim::ship_bundle(client_id, team, kind, pose),
             Bank(bank),
+            Points(0),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
             PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
@@ -656,6 +686,7 @@ fn hit_detection(
         &mut Health,
     )>,
     delays: Query<&InterpolationDelay, With<ClientOf>>,
+    mut points: ResMut<PointsStore>,
 ) {
     let tick = timeline.tick();
     for (bullet_entity, position, velocity, marker) in &bullets {
@@ -696,18 +727,21 @@ fn hit_detection(
         };
 
         commands.entity(bullet_entity).try_despawn();
-        let Ok((_, target_id, _, target_pos, _, _, cargo, mut health)) = targets.get_mut(target)
+        let Ok((_, target_id, _, target_pos, _, kind, cargo, mut health)) = targets.get_mut(target)
         else {
             continue;
         };
         let target_id = target_id.0;
         health.current = health.current.saturating_sub(1);
+        points.award(marker.owner, sim::POINTS_PER_HIT);
         info!(
             "Hit: {:?} shot {target:?} (health now {}/{})",
             marker.owner, health.current, health.max
         );
         if health.current == 0 {
             info!("Kill: {:?} destroyed {:?}", marker.owner, target_id);
+            let victim_hull = kind.copied().unwrap_or(HullKind::Fighter);
+            points.award(marker.owner, hulls::kill_bounty(victim_hull));
             // Undeposited ore scatters as scoopable fragments — recoverable
             // by the victim's team, or stolen by the killer's (DESIGN §3).
             scatter_cargo(

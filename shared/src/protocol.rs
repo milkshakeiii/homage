@@ -196,6 +196,12 @@ impl CargoHold {
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Bank(pub u32);
 
+/// Points earned for team-positive actions (DESIGN §5): damage, kills,
+/// deposits. Like the bank, the authoritative store is server-side and
+/// persists through death; points buy fitting unlocks (M3).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Points(pub u32);
+
 /// Per-player color within the team's hue band: friend-or-foe is readable at
 /// a glance, individuals still distinguishable.
 pub fn color_from_id(client_id: PeerId, team: Team) -> Color {
@@ -307,6 +313,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<OreFragment>().replicate();
         app.component::<CargoHold>().replicate();
         app.component::<Bank>().replicate();
+        app.component::<Points>().replicate();
 
         app.component::<Weapon>().replicate().predict();
 

@@ -291,6 +291,24 @@ impl TestNet {
             .insert(PeerId::Netcode(client_id), amount);
     }
 
+    /// Server-authoritative points for a client.
+    pub fn server_points(&mut self, client_id: u64) -> u32 {
+        self.server
+            .world()
+            .resource::<homage_server::PointsStore>()
+            .0
+            .get(&PeerId::Netcode(client_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The points value replicated onto a client's own ship.
+    pub fn client_points(&mut self, client_idx: usize) -> Option<u32> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query_filtered::<&Points, With<Predicted>>();
+        query.iter(world).next().map(|points| points.0)
+    }
+
     /// Server-authoritative bank balance for a client.
     pub fn server_bank(&mut self, client_id: u64) -> u32 {
         self.server

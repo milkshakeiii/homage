@@ -181,6 +181,12 @@ pub fn class(kind: HullKind) -> HullClass {
     }
 }
 
+/// Points awarded for destroying a ship of this hull (DESIGN §5): scaled by
+/// hull class so big-game hunting pays. Placeholder curve off the hull cost.
+pub fn kill_bounty(kind: HullKind) -> u32 {
+    4 + stats(kind).cost / 5
+}
+
 pub fn display_name(kind: HullKind) -> &'static str {
     match kind {
         HullKind::Fighter => "Fighter",

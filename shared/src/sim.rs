@@ -77,6 +77,10 @@ pub const CONTROLLER_DEPOSIT_RADIUS: f32 = 170.0;
 /// One ore unit transfers per this many ticks — a full fighter hold takes
 /// ~1s of hovering, so depositing is a deliberate, vulnerable moment.
 pub const DEPOSIT_INTERVAL_TICKS: u16 = 12;
+
+// Points (DESIGN §5): awarded automatically for team-positive actions.
+pub const POINTS_PER_HIT: u32 = 1;
+pub const POINTS_PER_ORE_DEPOSITED: u32 = 1;
 /// Ships take spawn on a ring around their mothership.
 pub const SPAWN_RING_RADIUS: f32 = MOTHERSHIP_RADIUS + 120.0;
 

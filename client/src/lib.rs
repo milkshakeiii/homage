@@ -520,20 +520,27 @@ fn log_hud_layout(
 fn update_hud(
     time: Res<Time>,
     recent: Res<juice::RecentEarnings>,
+    recent_points: Res<juice::RecentPoints>,
     destruct: Res<SelfDestructHold>,
     ship: Query<
-        (Option<&Bank>, Option<&CargoHold>),
+        (Option<&Bank>, Option<&Points>, Option<&CargoHold>),
         (With<Predicted>, With<InputMarker<Inputs>>),
     >,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
-    let (Ok((bank, cargo)), Ok(mut text)) = (ship.single(), hud.single_mut()) else {
+    let (Ok((bank, points, cargo)), Ok(mut text)) = (ship.single(), hud.single_mut()) else {
         return;
     };
     let bank = bank.map_or(0, |b| b.0);
+    let points = points.map_or(0, |p| p.0);
     let (held, capacity) = cargo.map_or((0, 0), |c| (c.current, c.capacity));
     let earned = if recent.visible(time.elapsed_secs()) {
         format!(" (+{})", recent.amount)
+    } else {
+        String::new()
+    };
+    let points_earned = if recent_points.visible(time.elapsed_secs()) {
+        format!(" (+{})", recent_points.amount)
     } else {
         String::new()
     };
@@ -545,7 +552,9 @@ fn update_hud(
     } else {
         String::new()
     };
-    text.0 = format!("Banked: {bank}{earned}   Hold: {held}/{capacity}{warning}");
+    text.0 = format!(
+        "Banked: {bank}{earned}   Pts: {points}{points_earned}   Hold: {held}/{capacity}{warning}"
+    );
 }
 
 fn connect(mut commands: Commands, client: Single<Entity, With<Client>>) {

@@ -45,6 +45,7 @@ impl Plugin for JuicePlugin {
         app.init_resource::<ShipPosCache>();
         app.init_resource::<KillRings>();
         app.init_resource::<RecentEarnings>();
+        app.init_resource::<RecentPoints>();
         app.add_systems(Startup, setup_sfx);
         app.add_systems(
             Update,
@@ -53,6 +54,7 @@ impl Plugin for JuicePlugin {
                 detect_damage,
                 detect_own_fire,
                 detect_deposit,
+                detect_points,
                 ensure_trails,
                 decay_shake,
             ),
@@ -434,6 +436,44 @@ impl RecentEarnings {
     pub fn visible(&self, now: f32) -> bool {
         self.amount > 0 && now - self.last_earn < Self::LINGER_SECS
     }
+}
+
+/// Points gained since the last pause in earning, shown as "(+N)" next to
+/// the points number in the HUD (same treatment as ore earnings).
+#[derive(Resource, Default)]
+pub struct RecentPoints {
+    pub amount: u32,
+    pub last_earn: f32,
+}
+
+impl RecentPoints {
+    pub fn visible(&self, now: f32) -> bool {
+        self.amount > 0 && now - self.last_earn < RecentEarnings::LINGER_SECS
+    }
+}
+
+/// Track point gains on the local ship for the HUD accumulator.
+fn detect_points(
+    time: Res<Time>,
+    mut last_points: Local<Option<u32>>,
+    mut recent: ResMut<RecentPoints>,
+    ship: Query<&Points, (With<Predicted>, With<InputMarker<Inputs>>)>,
+) {
+    let now = time.elapsed_secs();
+    if !recent.visible(now) && recent.amount > 0 {
+        recent.amount = 0;
+    }
+    let Ok(points) = ship.single() else {
+        *last_points = None;
+        return;
+    };
+    if let Some(previous) = *last_points {
+        if points.0 > previous {
+            recent.amount += points.0 - previous;
+            recent.last_earn = now;
+        }
+    }
+    *last_points = Some(points.0);
 }
 
 /// A soft chime per banked unit, and the (+N) accumulator for the HUD.
