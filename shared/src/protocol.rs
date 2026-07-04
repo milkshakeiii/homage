@@ -143,6 +143,25 @@ impl MapEntities for SpawnOrder {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SelfDestruct;
 
+/// Client → server: dev cheats for manual testing (F-keys on the client).
+/// Always-on during development; must be gated or stripped before any
+/// public-facing build.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum CheatOrder {
+    /// Add ore to the bank without harvesting.
+    GiveOre(u32),
+    /// Spawn an asteroid at a world position (usually the cursor).
+    SpawnAsteroid(Vec2),
+    /// Scatter a ring of ore fragments at a world position.
+    SpawnFragments(Vec2),
+    /// Spawn a stationary enemy target drone to shoot at.
+    SpawnTargetDrone(Vec2),
+    /// Teleport my ship to a world position.
+    Teleport(Vec2),
+    /// Restore my ship to full health.
+    Heal,
+}
+
 /// Reliable channel for player orders (spawn requests, later: build orders).
 pub struct OrdersChannel;
 
@@ -270,6 +289,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer)
             .add_map_entities();
         app.register_message::<SelfDestruct>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);
 
         app.component::<Name>().replicate();

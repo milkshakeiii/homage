@@ -185,6 +185,7 @@ pub fn build_client_app(config: ClientConfig) -> App {
                 accumulate_taps,
                 track_mouse,
                 self_destruct,
+                send_cheats,
                 update_hud,
                 respawn_menu,
             ),
@@ -609,6 +610,36 @@ fn self_destruct(
                 info!("SelfDestruct sent");
             }
             Err(e) => warn!("SelfDestruct not sent, no sender: {e}"),
+        }
+    }
+}
+
+/// Dev cheats on F-keys (manual testing; see CheatOrder). Position-taking
+/// cheats use the mouse cursor's world position.
+fn send_cheats(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<MouseWorld>,
+    mut sender: Query<&mut MessageSender<CheatOrder>, With<Client>>,
+) {
+    let cheat = if keys.just_pressed(KeyCode::F1) {
+        Some(CheatOrder::GiveOre(50))
+    } else if keys.just_pressed(KeyCode::F2) {
+        Some(CheatOrder::SpawnAsteroid(mouse.cursor))
+    } else if keys.just_pressed(KeyCode::F3) {
+        Some(CheatOrder::SpawnFragments(mouse.cursor))
+    } else if keys.just_pressed(KeyCode::F4) {
+        Some(CheatOrder::SpawnTargetDrone(mouse.cursor))
+    } else if keys.just_pressed(KeyCode::F5) {
+        Some(CheatOrder::Teleport(mouse.cursor))
+    } else if keys.just_pressed(KeyCode::F6) {
+        Some(CheatOrder::Heal)
+    } else {
+        None
+    };
+    if let Some(cheat) = cheat {
+        if let Ok(mut sender) = sender.single_mut() {
+            info!("cheat: {cheat:?}");
+            sender.send::<OrdersChannel>(cheat);
         }
     }
 }

@@ -167,7 +167,10 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     // every frame — draining there silently drops most messages (the e2e
     // harness can't catch this: manual stepping runs exactly one tick per
     // frame, masking the race).
-    app.add_systems(Update, (receive_spawn_orders, receive_self_destructs));
+    app.add_systems(
+        Update,
+        (receive_spawn_orders, receive_self_destructs, receive_cheats),
+    );
     app.add_systems(
         FixedUpdate,
         (
@@ -469,6 +472,89 @@ fn scatter_cargo(commands: &mut Commands, position: Vec2, amount: u16, tick: Tic
     }
 }
 
+/// Dev cheats (manual-testing aids; strip or gate before public builds).
+#[allow(clippy::too_many_arguments)]
+fn receive_cheats(
+    mut commands: Commands,
+    timeline: Res<LocalTimeline>,
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<CheatOrder>), With<ClientOf>>,
+    mut banks: ResMut<Banks>,
+    mut ships: Query<(
+        &PlayerId,
+        &Team,
+        &mut Position,
+        &mut LinearVelocity,
+        &mut Health,
+        &mut Bank,
+    )>,
+    mut drone_counter: Local<u64>,
+) {
+    let tick = timeline.tick();
+    for (client_id, mut receiver) in &mut receivers {
+        for cheat in receiver.receive() {
+            info!("CHEAT from {:?}: {cheat:?}", client_id.0);
+            match cheat {
+                CheatOrder::GiveOre(amount) => {
+                    let total = banks.0.entry(client_id.0).or_insert(0);
+                    *total += amount;
+                    if let Some((.., mut bank)) =
+                        ships.iter_mut().find(|(id, ..)| id.0 == client_id.0)
+                    {
+                        bank.0 = *total;
+                    }
+                }
+                CheatOrder::SpawnAsteroid(pos) => {
+                    commands.spawn((
+                        sim::asteroid_bundle(pos, 45.0, tick.0 as u16),
+                        Replicate::to_clients(NetworkTarget::All),
+                    ));
+                }
+                CheatOrder::SpawnFragments(pos) => {
+                    scatter_cargo(&mut commands, pos, 6, tick);
+                }
+                CheatOrder::SpawnTargetDrone(pos) => {
+                    let Some(team) = ships
+                        .iter()
+                        .find(|(id, ..)| id.0 == client_id.0)
+                        .map(|(_, team, ..)| *team)
+                    else {
+                        continue;
+                    };
+                    *drone_counter += 1;
+                    let drone_id = PeerId::Netcode(90_000 + *drone_counter);
+                    commands.spawn((
+                        sim::ship_bundle(
+                            drone_id,
+                            team.opponent(),
+                            HullKind::Fighter,
+                            (Position(pos), Rotation::default()),
+                        ),
+                        Bank(0),
+                        ShipPoseHistory::default(),
+                        Replicate::to_clients(NetworkTarget::All),
+                        InterpolationTarget::to_clients(NetworkTarget::All),
+                    ));
+                }
+                CheatOrder::Teleport(pos) => {
+                    if let Some((_, _, mut position, mut velocity, ..)) =
+                        ships.iter_mut().find(|(id, ..)| id.0 == client_id.0)
+                    {
+                        position.0 = pos;
+                        velocity.0 = Vec2::ZERO;
+                    }
+                }
+                CheatOrder::Heal => {
+                    if let Some((.., mut health, _)) =
+                        ships.iter_mut().find(|(id, ..)| id.0 == client_id.0)
+                    {
+                        health.current = health.max;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Scuttle on request: the only way to swap hulls without an enemy's help.
 /// Same consequences as any death (cargo scatters, normal respawn delay).
 fn receive_self_destructs(
@@ -621,13 +707,6 @@ fn hit_detection(
             marker.owner, health.current, health.max
         );
         if health.current == 0 {
-            let Some(link) = shooters
-                .iter()
-                .find(|(id, _, _)| id.0 == target_id)
-                .map(|(_, _, controlled_by)| controlled_by.owner)
-            else {
-                continue;
-            };
             info!("Kill: {:?} destroyed {:?}", marker.owner, target_id);
             // Undeposited ore scatters as scoopable fragments — recoverable
             // by the victim's team, or stolen by the killer's (DESIGN §3).
@@ -638,11 +717,19 @@ fn hit_detection(
                 tick,
             );
             commands.entity(target).try_despawn();
-            commands.spawn(RespawnTask {
-                client_id: target_id,
-                link,
-                ticks_remaining: sim::RESPAWN_DELAY_TICKS,
-            });
+            // Only player ships respawn; linkless ships (target drones)
+            // just die.
+            if let Some(link) = shooters
+                .iter()
+                .find(|(id, _, _)| id.0 == target_id)
+                .map(|(_, _, controlled_by)| controlled_by.owner)
+            {
+                commands.spawn(RespawnTask {
+                    client_id: target_id,
+                    link,
+                    ticks_remaining: sim::RESPAWN_DELAY_TICKS,
+                });
+            }
         }
     }
 }

@@ -223,6 +223,19 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
     }
 
+    /// Send a dev cheat from a client, as the F-keys would.
+    pub fn client_send_cheat(&mut self, client_idx: usize, cheat: CheatOrder) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<CheatOrder>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(cheat.clone());
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<CheatOrder> on the client entity");
+    }
+
     /// The client's replicated entity for another player's ship (lightyear
     /// 0.28 uses a single-entity model: the interpolated entity IS the
     /// replicated one the server's mapper understands).

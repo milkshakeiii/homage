@@ -26,7 +26,7 @@ pub const SEND_INTERVAL: Duration = Duration::from_millis(50);
 /// server and a new client refuse to connect outright instead of silently
 /// dropping the messages one side doesn't know (which reads as "the feature
 /// doesn't work" in playtests).
-pub const PROTOCOL_VERSION: u64 = 3;
+pub const PROTOCOL_VERSION: u64 = 4;
 pub const PROTOCOL_ID: u64 = 0x484f_4d41_4745 ^ (PROTOCOL_VERSION << 48); // "HOMAGE" + version
 pub const PRIVATE_KEY: [u8; 32] = [0; 32];
 

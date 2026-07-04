@@ -64,5 +64,9 @@ cargo run -p homage_client -- 2
 Controls: `W`/`↑` thrust, `S`/`↓` brake, `A`/`←` and `D`/`→` turn, `Space` or
 `LMB` fire (Gunship hulls aim their turret with the mouse; Captain hulls take
 WASD as screen-space nudges — see DESIGN.md §4.1). Hold `Backspace` ~1s to
-self-destruct; while dead, digit keys choose the next hull (respawn is
-automatic after ~3s).
+self-destruct; while dead, digit keys choose the next hull and `Tab` cycles
+the spawn facility (respawn is automatic after ~3s).
+
+Dev cheats (manual testing; position cheats target the mouse cursor):
+`F1` +50 ore · `F2` spawn asteroid · `F3` spawn ore fragments · `F4` spawn an
+enemy target drone · `F5` teleport · `F6` heal.
