@@ -14,7 +14,7 @@
 use avian2d::prelude::Position;
 use bevy::prelude::*;
 use homage_shared::protocol::*;
-use homage_shared::{hulls, sim};
+use homage_shared::{fittings, hulls, sim};
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::*;
 use lightyear::prelude::*;
@@ -33,6 +33,7 @@ pub enum DeadUi {
 pub struct LoadoutState {
     pub hull: HullKind,
     pub facility: Option<Entity>,
+    pub loadout: Loadout,
     pub confirmed: bool,
     /// Detail-panel text (last clicked tile).
     pub detail: String,
@@ -43,6 +44,7 @@ impl Default for LoadoutState {
         Self {
             hull: HullKind::Fighter,
             facility: None,
+            loadout: Loadout::default(),
             confirmed: false,
             detail: String::new(),
         }
@@ -55,6 +57,13 @@ impl Default for LoadoutState {
 struct WealthCache {
     bank: u32,
     points: u32,
+    unlocked: std::collections::HashSet<FittingId>,
+}
+
+impl WealthCache {
+    fn has_unlock(&self, fitting: FittingId) -> bool {
+        homage_shared::fittings::def(fitting).cost == 0 || self.unlocked.contains(&fitting)
+    }
 }
 
 // UI marker components.
@@ -73,7 +82,7 @@ struct LoadoutRoot;
 #[derive(Component)]
 struct HullTile(HullKind);
 #[derive(Component)]
-struct ModuleTile(usize);
+struct ModuleTile(FittingId);
 #[derive(Component)]
 struct DetailText;
 #[derive(Component)]
@@ -88,35 +97,6 @@ struct FacilityContextText;
 struct SpawnButton;
 #[derive(Component)]
 struct SpawnButtonText;
-
-/// Placeholder module catalog (DESIGN §5) until fittings land in M3. Shown
-/// dimmed; clicking explains. Costs are points.
-struct ModEntry {
-    name: &'static str,
-    cost: u32,
-    stocked: &'static str,
-    blurb: &'static str,
-}
-
-const WEAPON_MODS: [ModEntry; 6] = [
-    ModEntry { name: "Pulse Cannon", cost: 0, stocked: "everywhere", blurb: "Standard-issue autocannon. Reliable, unremarkable, yours." },
-    ModEntry { name: "Scatter Gun", cost: 8, stocked: "any carrier", blurb: "Close-range spread. Ruins knife fights for the other guy." },
-    ModEntry { name: "Long-Lance Railgun", cost: 20, stocked: "strike carrier", blurb: "Slow cycle, extreme velocity. Leading shots become sniping." },
-    ModEntry { name: "Flak Burst", cost: 10, stocked: "any carrier", blurb: "Proximity detonation. The anti-fighter screen in a barrel." },
-    ModEntry { name: "Torpedo", cost: 0, stocked: "any carrier", blurb: "Slow, huge, dumb-fire. Capital ships hate it." },
-    ModEntry { name: "Mag-Torpedo", cost: 25, stocked: "strike carrier", blurb: "Mild tracking, lighter payload. Forgiveness in a tube." },
-];
-
-const ITEM_MODS: [ModEntry; 8] = [
-    ModEntry { name: "Afterburner", cost: 10, stocked: "everywhere", blurb: "Heat-limited boost. Ride the redline." },
-    ModEntry { name: "Blink Thruster", cost: 25, stocked: "outfitter", blurb: "Impulse dash on a cooldown. Be somewhere else." },
-    ModEntry { name: "Shield Capacitor", cost: 25, stocked: "outfitter", blurb: "Timed damage absorb. An active block, not a health bar." },
-    ModEntry { name: "Tractor Scoop", cost: 12, stocked: "res. controller", blurb: "Wider ore pickup that pulls fragments to you." },
-    ModEntry { name: "Repair Drone", cost: 20, stocked: "outfitter", blurb: "Slow out-of-combat regeneration." },
-    ModEntry { name: "Gyro Tuning", cost: 8, stocked: "everywhere", blurb: "+turn rate. The cheapest way to feel better." },
-    ModEntry { name: "Armor Plate", cost: 8, stocked: "everywhere", blurb: "+HP, +mass. Trade dance for endurance." },
-    ModEntry { name: "Compacted Hold", cost: 15, stocked: "res. controller", blurb: "+cargo capacity, worse handling. One more rock." },
-];
 
 const PANEL_BG: Color = Color::srgba(0.04, 0.07, 0.11, 0.94);
 const PANE_BG: Color = Color::srgba(0.09, 0.13, 0.19, 0.95);
@@ -353,6 +333,7 @@ fn map_facility_clicks(
             sender.send::<OrdersChannel>(SpawnOrder {
                 hull: state.hull,
                 spawn_at: state.facility,
+                loadout: state.loadout,
             });
         }
         *ui = DeadUi::Loadout;
@@ -361,7 +342,7 @@ fn map_facility_clicks(
 
 // ------------------------------------------------------------ loadout screen
 
-fn module_grid(parent: &mut ChildSpawnerCommands, title: &str, mods: &'static [ModEntry], base: usize) {
+fn module_grid(parent: &mut ChildSpawnerCommands, title: &str, slots: &[fittings::Slot]) {
     parent.spawn(text(title, 18.0, AMBER));
     parent
         .spawn(Node {
@@ -370,9 +351,9 @@ fn module_grid(parent: &mut ChildSpawnerCommands, title: &str, mods: &'static [M
             ..default()
         })
         .with_children(|grid| {
-            for (i, entry) in mods.iter().enumerate() {
+            for def in fittings::CATALOG.iter().filter(|d| slots.contains(&d.slot)) {
                 grid.spawn((
-                    ModuleTile(base + i),
+                    ModuleTile(def.id),
                     Button,
                     Node {
                         width: Val::Percent(23.0),
@@ -384,11 +365,11 @@ fn module_grid(parent: &mut ChildSpawnerCommands, title: &str, mods: &'static [M
                     BackgroundColor(TILE_DISABLED),
                 ))
                 .with_children(|tile| {
-                    tile.spawn(text(entry.name, 13.0, DIM));
-                    let cost = if entry.cost == 0 {
+                    tile.spawn(text(def.name, 13.0, BRIGHT));
+                    let cost = if def.cost == 0 {
                         "free".to_string()
                     } else {
-                        format!("{} pts", entry.cost)
+                        format!("{} pts", def.cost)
                     };
                     tile.spawn(text(&cost, 12.0, DIM));
                 });
@@ -428,8 +409,12 @@ fn setup_loadout_screen(mut commands: Commands) {
                 panel
                     .spawn(pane(Val::Percent(50.0), Val::Percent(100.0)))
                     .with_children(|left| {
-                        module_grid(left, "WEAPONS", &WEAPON_MODS, 0);
-                        module_grid(left, "ITEMS", &ITEM_MODS, WEAPON_MODS.len());
+                        module_grid(left, "WEAPONS", &[fittings::Slot::Weapon]);
+                        module_grid(
+                            left,
+                            "ITEMS",
+                            &[fittings::Slot::Utility, fittings::Slot::HullMod],
+                        );
                         left.spawn((
                             Node {
                                 flex_grow: 1.0,
@@ -532,12 +517,18 @@ fn setup_loadout_screen(mut commands: Commands) {
 
 /// Cache wealth while alive; the ship's components vanish on death.
 fn cache_wealth(
-    ship: Query<(Option<&Bank>, Option<&Points>), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    ship: Query<
+        (Option<&Bank>, Option<&Points>, Option<&UnlockedFittings>),
+        (With<Predicted>, With<InputMarker<Inputs>>),
+    >,
     mut cache: ResMut<WealthCache>,
 ) {
-    if let Ok((bank, points)) = ship.single() {
+    if let Ok((bank, points, unlocked)) = ship.single() {
         cache.bank = bank.map_or(cache.bank, |b| b.0);
         cache.points = points.map_or(cache.points, |p| p.0);
+        if let Some(unlocked) = unlocked {
+            cache.unlocked = unlocked.0.iter().copied().collect();
+        }
     }
 }
 
@@ -610,6 +601,7 @@ fn hull_tile_clicks(
             sender.send::<OrdersChannel>(SpawnOrder {
                 hull: state.hull,
                 spawn_at: state.facility,
+                loadout: state.loadout,
             });
         }
     }
@@ -671,26 +663,83 @@ fn hull_requirement_note(kind: HullKind) -> &'static str {
     }
 }
 
+/// Unlock-or-equip: locked tiles buy the unlock with points; unlocked tiles
+/// equip (or unequip, for optional slots) when the facility stocks them.
 fn module_tile_clicks(
     mut state: ResMut<LoadoutState>,
+    wealth: Res<WealthCache>,
+    facility_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
     tiles: Query<(&Interaction, &ModuleTile), Changed<Interaction>>,
+    mut orders: Query<&mut MessageSender<UnlockOrder>, With<Client>>,
+    mut spawn_orders: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
 ) {
     for (interaction, tile) in &tiles {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let entry = if tile.0 < WEAPON_MODS.len() {
-            &WEAPON_MODS[tile.0]
-        } else {
-            &ITEM_MODS[tile.0 - WEAPON_MODS.len()]
+        let def = fittings::def(tile.0);
+        let stocked_note = match def.stocking {
+            fittings::Stocking::Everywhere => "stocked everywhere",
+            fittings::Stocking::AnyCarrier => "stocked at carriers",
+            fittings::Stocking::StrikeCarrierOnly => "stocked at strike carriers",
         };
-        state.detail = format!(
-            "{} ({})\n{}\nStocked at: {}   —   fitting unlocks arrive in M3.",
-            entry.name,
-            if entry.cost == 0 { "free".into() } else { format!("{} pts", entry.cost) },
-            entry.blurb,
-            entry.stocked,
-        );
+        // Not yet unlocked: this click is a purchase attempt.
+        if !wealth.has_unlock(tile.0) {
+            if wealth.points < def.cost {
+                state.detail = format!(
+                    "{} — {}\n{stocked_note}\nUnlock costs {} pts; you have {}.",
+                    def.name, def.blurb, def.cost, wealth.points
+                );
+            } else {
+                if let Ok(mut sender) = orders.single_mut() {
+                    sender.send::<OrdersChannel>(UnlockOrder { fitting: tile.0 });
+                }
+                state.detail = format!(
+                    "{} — unlocking for {} pts (yours for the match). Click again to equip.",
+                    def.name, def.cost
+                );
+            }
+            continue;
+        }
+        // Unlocked: equip if the selected facility stocks it.
+        let stocked_here = facility_kind(state.facility, &facility_lookup)
+            .map(|f| match f {
+                FacilityKind::Mothership => fittings::stocked_at(
+                    def.stocking,
+                    fittings::SpawnFacility::Mothership,
+                ),
+                FacilityKind::StrikeCarrier => fittings::stocked_at(
+                    def.stocking,
+                    fittings::SpawnFacility::StrikeCarrier,
+                ),
+            })
+            .unwrap_or(false);
+        if !stocked_here {
+            state.detail = format!(
+                "{} — {}\nNot stocked at this facility ({stocked_note}). Pick another spawn point [M].",
+                def.name, def.blurb
+            );
+            continue;
+        }
+        match def.slot {
+            fittings::Slot::Weapon => state.loadout.weapon = tile.0,
+            fittings::Slot::Utility => {
+                state.loadout.utility =
+                    (state.loadout.utility != Some(tile.0)).then_some(tile.0);
+            }
+            fittings::Slot::HullMod => {
+                state.loadout.hull_mod =
+                    (state.loadout.hull_mod != Some(tile.0)).then_some(tile.0);
+            }
+        }
+        state.detail = format!("{} — equipped.\n{}", def.name, def.blurb);
+        if let Ok(mut sender) = spawn_orders.single_mut() {
+            sender.send::<OrdersChannel>(SpawnOrder {
+                hull: state.hull,
+                spawn_at: state.facility,
+                loadout: state.loadout,
+            });
+        }
     }
 }
 
@@ -715,6 +764,7 @@ fn spawn_button_clicks(
             sender.send::<OrdersChannel>(SpawnOrder {
                 hull: state.hull,
                 spawn_at: state.facility,
+                loadout: state.loadout,
             });
         }
         if let Ok(mut sender) = confirms.single_mut() {
@@ -761,7 +811,8 @@ fn update_screen_texts(
         Query<&mut Text, With<SpawnButtonText>>,
     )>,
     gate_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
-    mut hull_tiles: Query<(&HullTile, &mut BackgroundColor)>,
+    mut hull_tiles: Query<(&HullTile, &mut BackgroundColor), Without<ModuleTile>>,
+    mut module_tiles: Query<(&ModuleTile, &mut BackgroundColor), Without<HullTile>>,
 ) {
     if *ui == DeadUi::Hidden {
         *died_at = None;
@@ -798,9 +849,18 @@ fn update_screen_texts(
         );
     }
     if let Ok(mut t) = texts.p3().single_mut() {
+        let weapon = if stats.weapon.is_some() {
+            fittings::def(state.loadout.weapon).name
+        } else {
+            "none (hull is unarmed)"
+        };
+        let slot = |f: Option<FittingId>| {
+            f.map(|f| fittings::def(f).name).unwrap_or("— empty —")
+        };
         t.0 = format!(
-            "Weapon: {}\nUtility: — empty —\nHull mod: — empty —",
-            if stats.weapon.is_some() { "hull default" } else { "none (unarmed)" },
+            "Weapon: {weapon}\nUtility: {}\nHull mod: {}",
+            slot(state.loadout.utility),
+            slot(state.loadout.hull_mod),
         );
     }
     if let Ok(mut t) = texts.p4().single_mut() {
@@ -831,6 +891,26 @@ fn update_screen_texts(
         };
     }
     let facility = facility_kind(state.facility, &gate_lookup);
+    let spawn_facility = facility.map(|f| match f {
+        FacilityKind::Mothership => fittings::SpawnFacility::Mothership,
+        FacilityKind::StrikeCarrier => fittings::SpawnFacility::StrikeCarrier,
+    });
+    for (tile, mut bg) in &mut module_tiles {
+        let def = fittings::def(tile.0);
+        let equipped = state.loadout.weapon == tile.0
+            || state.loadout.utility == Some(tile.0)
+            || state.loadout.hull_mod == Some(tile.0);
+        let stocked = spawn_facility
+            .map(|f| fittings::stocked_at(def.stocking, f))
+            .unwrap_or(false);
+        bg.0 = if equipped {
+            TILE_SELECTED
+        } else if wealth.has_unlock(tile.0) && stocked {
+            TILE_BG
+        } else {
+            TILE_DISABLED
+        };
+    }
     for (tile, mut bg) in &mut hull_tiles {
         bg.0 = if tile.0 == state.hull {
             TILE_SELECTED

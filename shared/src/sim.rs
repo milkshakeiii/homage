@@ -152,27 +152,34 @@ pub fn spawn_pose_at(
 }
 
 /// Everything a ship needs on the server; replication/prediction targets are
-/// added separately by the server.
+/// added separately by the server. The loadout must already be validated
+/// (unlocks + facility stocking).
 pub fn ship_bundle(
     client_id: PeerId,
     team: Team,
     kind: HullKind,
+    loadout: Loadout,
     pose: (Position, Rotation),
 ) -> impl Bundle {
     let stats = crate::hulls::stats(kind);
-    let weapon = stats.weapon.unwrap_or(crate::hulls::WeaponStats {
-        cooldown_ticks: u16::MAX,
-        bullet_speed: 0.0,
-    });
+    let mods = crate::fittings::hull_mod_effects(loadout.hull_mod);
+    let weapon = crate::fittings::weapon_profile(loadout.weapon, kind);
+    let (cooldown, bullet_speed) = weapon
+        .map(|w| (w.cooldown_ticks, w.bullet_speed))
+        .unwrap_or((u16::MAX, 0.0));
+    let health = (stats.health as i32 + mods.health_bonus).max(1) as u16;
+    let cargo = (stats.cargo_capacity as f32 * mods.cargo_mult) as u16;
     let (position, rotation) = pose;
     (
         PlayerId(client_id),
         team,
         kind,
         PlayerColor(color_from_id(client_id, team)),
-        Health::new(stats.health),
-        Weapon::new(weapon.cooldown_ticks, weapon.bullet_speed),
-        CargoHold::empty(stats.cargo_capacity),
+        Health::new(health),
+        Weapon::new(cooldown, bullet_speed),
+        Equipped(loadout),
+        UtilityState::default(),
+        CargoHold::empty(cargo),
         TurretAim(0.0),
         position,
         rotation,
@@ -230,8 +237,9 @@ pub fn fragment_bundle(position: Vec2, velocity: Vec2, tick: Tick) -> impl Bundl
 /// A bullet is uniquely identified by its owner and the tick it was fired on;
 /// the client's prespawned bullet and the server's authoritative bullet
 /// compute the same hash and get matched by lightyear.
-pub fn bullet_prespawn_hash(owner: PeerId, tick: Tick) -> u64 {
+pub fn bullet_prespawn_hash(owner: PeerId, tick: Tick, pellet: u8) -> u64 {
     let mut x = owner.to_bits() ^ ((tick.0 as u64) << 32) ^ tick.0 as u64;
+    x ^= (pellet as u64 + 1) << 48;
     // SplitMix64 finalizer.
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -249,6 +257,7 @@ pub fn bullet_prespawn_hash(owner: PeerId, tick: Tick) -> u64 {
 /// on server-side entities that have an `InterpolationTarget`, which silently
 /// empties the query.)
 pub fn player_movement(
+    timeline: Res<LocalTimeline>,
     mut query: Query<
         (
             &ActionState<Inputs>,
@@ -257,14 +266,38 @@ pub fn player_movement(
             &mut AngularVelocity,
             Option<&CargoHold>,
             Option<&HullKind>,
+            Option<&Equipped>,
+            Option<&mut UtilityState>,
         ),
         With<PlayerId>,
     >,
 ) {
-    for (action_state, rotation, mut linvel, mut angvel, cargo, kind) in &mut query {
+    let tick = timeline.tick();
+    for (action_state, rotation, mut linvel, mut angvel, cargo, kind, equipped, utility) in
+        &mut query
+    {
         let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let input = &action_state.0 .0;
         let load = cargo.map_or(0.0, CargoHold::load_fraction);
+        let loadout = equipped.map(|e| e.0).unwrap_or_default();
+        let mods = crate::fittings::hull_mod_effects(loadout.hull_mod);
+        // Afterburner: hold the ability key for more thrust (guidepost 4's
+        // heat cost is a follow-up).
+        let burner = if input.ability && loadout.utility == Some(FittingId::Afterburner) {
+            crate::fittings::AFTERBURNER_ACCEL_MULT
+        } else {
+            1.0
+        };
+        // Blink: an instant impulse along the nose on a fixed cooldown, all
+        // in the predicted UtilityState so rollbacks replay it.
+        if input.ability && loadout.utility == Some(FittingId::BlinkThruster) {
+            if let Some(mut state) = utility {
+                if (tick - state.ready_at) >= 0 {
+                    linvel.0 += *rotation * Vec2::X * crate::fittings::BLINK_IMPULSE;
+                    state.ready_at = tick + Tick(crate::fittings::BLINK_COOLDOWN_TICKS as u32);
+                }
+            }
+        }
 
         // Captain hulls (DESIGN §4.1) drift omnidirectionally: WASD nudges in
         // screen space, no meaningful facing, the mouse is for abilities.
@@ -283,7 +316,8 @@ pub fn player_movement(
         }
 
         if input.thrust {
-            let accel = stats.accel * (1.0 - CARGO_ACCEL_PENALTY * load);
+            let accel =
+                stats.accel * mods.accel_mult * burner * (1.0 - CARGO_ACCEL_PENALTY * load);
             linvel.0 += *rotation * Vec2::X * accel * TICK_DT;
         }
         // Brake opposes the velocity vector regardless of facing: a recovery
@@ -298,10 +332,11 @@ pub fn player_movement(
                 linvel.0 - linvel.0 * (decel / speed)
             };
         }
+        let turn = stats.turn_speed * mods.turn_mult;
         let desired_ang_vel = if input.turn_left {
-            stats.turn_speed
+            turn
         } else if input.turn_right {
-            -stats.turn_speed
+            -turn
         } else {
             0.0
         };
@@ -311,17 +346,34 @@ pub fn player_movement(
     }
 }
 
-/// Asteroids-style speed cap on top of damping; a loaded hold lowers the cap.
+/// Asteroids-style speed cap on top of damping; a loaded hold lowers the
+/// cap, hull mods and a lit afterburner move it.
 pub fn clamp_ship_speed(
     mut query: Query<
-        (&mut LinearVelocity, Option<&CargoHold>, Option<&HullKind>),
+        (
+            &mut LinearVelocity,
+            Option<&CargoHold>,
+            Option<&HullKind>,
+            Option<&Equipped>,
+            Option<&ActionState<Inputs>>,
+        ),
         With<PlayerId>,
     >,
 ) {
-    for (mut velocity, cargo, kind) in &mut query {
+    for (mut velocity, cargo, kind, equipped, action) in &mut query {
         let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
         let load = cargo.map_or(0.0, CargoHold::load_fraction);
-        let max = stats.max_speed * (1.0 - CARGO_SPEED_PENALTY * load);
+        let loadout = equipped.map(|e| e.0).unwrap_or_default();
+        let mods = crate::fittings::hull_mod_effects(loadout.hull_mod);
+        let burner = if loadout.utility == Some(FittingId::Afterburner)
+            && action.is_some_and(|a| a.0 .0.ability)
+        {
+            crate::fittings::AFTERBURNER_SPEED_MULT
+        } else {
+            1.0
+        };
+        let max =
+            stats.max_speed * mods.max_speed_mult * burner * (1.0 - CARGO_SPEED_PENALTY * load);
         if velocity.0.length_squared() > max * max {
             velocity.0 = velocity.0.normalize() * max;
         }
@@ -372,6 +424,7 @@ pub fn shared_player_firing(
         &PlayerColor,
         &PlayerId,
         Option<&HullKind>,
+        Option<&Equipped>,
         &ActionState<Inputs>,
         &mut Weapon,
         Has<Predicted>,
@@ -394,6 +447,7 @@ pub fn shared_player_firing(
         color,
         player_id,
         kind,
+        equipped,
         action_state,
         mut weapon,
         is_predicted,
@@ -431,39 +485,50 @@ pub fn shared_player_firing(
         weapon.fire_requested = None;
 
         // Pilot hulls fire down the nose; Gunship hulls fire along the
-        // mouse-aimed turret. Both spawn the bullet clear of the hull and
-        // inherit the ship's velocity (guidepost 3).
-        let stats = crate::hulls::stats(kind.copied().unwrap_or(HullKind::Fighter));
+        // mouse-aimed turret. Both spawn bullets clear of the hull and
+        // inherit the ship's velocity (guidepost 3). The equipped weapon
+        // fitting sets pellet count, spread, speed, and reach.
+        let hull = kind.copied().unwrap_or(HullKind::Fighter);
+        let stats = crate::hulls::stats(hull);
+        let loadout = equipped.map(|e| e.0).unwrap_or_default();
+        let Some(profile) = crate::fittings::weapon_profile(loadout.weapon, hull) else {
+            continue;
+        };
         let forward = match stats.archetype {
             crate::hulls::Archetype::Gunship => Vec2::from_angle(input.aim_radians()),
             _ => *rotation * Vec2::X,
         };
-        let origin = position.0 + forward * (stats.length / 2.0 + BULLET_SIZE + 2.0);
-        let bullet_velocity = forward * weapon.bullet_speed + velocity.0;
+        let lifetime = (BULLET_LIFETIME_TICKS as f32 * profile.lifetime_mult) as i32;
+        for pellet in 0..profile.pellets {
+            let offset = pellet as f32 - (profile.pellets as f32 - 1.0) / 2.0;
+            let dir = Vec2::from_angle(forward.to_angle() + offset * profile.spread);
+            let origin = position.0 + dir * (stats.length / 2.0 + BULLET_SIZE + 2.0);
+            let bullet_velocity = dir * weapon.bullet_speed + velocity.0;
 
-        let bullet = commands
-            .spawn((
-                Position(origin),
-                LinearVelocity(bullet_velocity),
-                RigidBody::Kinematic,
-                BulletMarker { owner: player_id.0 },
-                PlayerColor(color.0),
-                Expires {
-                    origin_tick: current_tick,
-                    lifetime_ticks: BULLET_LIFETIME_TICKS,
-                },
-                PreSpawned::new(bullet_prespawn_hash(player_id.0, current_tick)),
-                Name::from("Bullet"),
-            ))
-            .id();
+            let bullet = commands
+                .spawn((
+                    Position(origin),
+                    LinearVelocity(bullet_velocity),
+                    RigidBody::Kinematic,
+                    BulletMarker { owner: player_id.0 },
+                    PlayerColor(color.0),
+                    Expires {
+                        origin_tick: current_tick,
+                        lifetime_ticks: lifetime,
+                    },
+                    PreSpawned::new(bullet_prespawn_hash(player_id.0, current_tick, pellet)),
+                    Name::from("Bullet"),
+                ))
+                .id();
 
-        if is_server {
-            commands.entity(bullet).insert((
-                Replicate::to_clients(NetworkTarget::All),
-                PredictionTarget::to_clients(NetworkTarget::Single(player_id.0)),
-                InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(player_id.0)),
-                controlled_by.unwrap().clone(),
-            ));
+            if is_server {
+                commands.entity(bullet).insert((
+                    Replicate::to_clients(NetworkTarget::All),
+                    PredictionTarget::to_clients(NetworkTarget::Single(player_id.0)),
+                    InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(player_id.0)),
+                    controlled_by.unwrap().clone(),
+                ));
+            }
         }
     }
 }

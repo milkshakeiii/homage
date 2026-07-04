@@ -18,7 +18,7 @@ use bevy::state::app::StatesPlugin;
 use core::net::SocketAddr;
 use core::time::Duration;
 use homage_shared::protocol::*;
-use homage_shared::{hulls, sim, SharedPlugin};
+use homage_shared::{fittings, hulls, sim, SharedPlugin};
 use homage_shared::{FIXED_TIMESTEP_HZ, PRIVATE_KEY, PROTOCOL_ID, SEND_INTERVAL};
 use lightyear::connection::client::Connected;
 use lightyear::connection::client_of::ClientOf;
@@ -93,6 +93,64 @@ pub struct PointsStore(pub std::collections::HashMap<PeerId, u32>);
 impl PointsStore {
     fn award(&mut self, player: PeerId, amount: u32) {
         *self.0.entry(player).or_insert(0) += amount;
+    }
+}
+
+/// Match-permanent fitting unlocks per player (DESIGN §5: points are spent
+/// on the unlock; nothing is re-bought per life).
+#[derive(Resource, Default)]
+pub struct Unlocks(pub std::collections::HashMap<PeerId, std::collections::HashSet<FittingId>>);
+
+impl Unlocks {
+    pub fn has(&self, player: PeerId, fitting: FittingId) -> bool {
+        fittings::def(fitting).cost == 0
+            || self.0.get(&player).is_some_and(|set| set.contains(&fitting))
+    }
+}
+
+/// Spend points to unlock a fitting; idempotent and refuses on insufficient
+/// points.
+fn receive_unlock_orders(
+    mut receivers: Query<(&RemoteId, &mut MessageReceiver<UnlockOrder>), With<ClientOf>>,
+    mut unlocks: ResMut<Unlocks>,
+    mut points: ResMut<PointsStore>,
+) {
+    for (client_id, mut receiver) in &mut receivers {
+        for order in receiver.receive() {
+            let def = fittings::def(order.fitting);
+            if unlocks.has(client_id.0, order.fitting) {
+                continue;
+            }
+            let balance = points.0.entry(client_id.0).or_insert(0);
+            if *balance < def.cost {
+                info!(
+                    "{:?} can't afford {:?} ({} pts, has {})",
+                    client_id.0, order.fitting, def.cost, balance
+                );
+                continue;
+            }
+            *balance -= def.cost;
+            unlocks.0.entry(client_id.0).or_default().insert(order.fitting);
+            info!("{:?} unlocked {:?} for {} pts", client_id.0, order.fitting, def.cost);
+        }
+    }
+}
+
+/// Mirror unlocks onto ship components for the spawn-screen UI.
+fn sync_unlocks(
+    unlocks: Res<Unlocks>,
+    mut ships: Query<(&PlayerId, &mut UnlockedFittings)>,
+) {
+    for (player, mut component) in &mut ships {
+        let mut list: Vec<FittingId> = unlocks
+            .0
+            .get(&player.0)
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default();
+        list.sort();
+        if component.0 != list {
+            component.0 = list;
+        }
     }
 }
 
@@ -188,6 +246,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<Banks>();
     app.init_resource::<SpawnChoices>();
     app.init_resource::<PointsStore>();
+    app.init_resource::<Unlocks>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     // Message drains MUST run in Update: lightyear clears MessageReceiver
@@ -200,6 +259,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
         (
             receive_spawn_orders,
             receive_spawn_confirms,
+            receive_unlock_orders,
             receive_self_destructs,
             receive_cheats,
         ),
@@ -212,6 +272,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
             scoop_fragments,
             deposit_cargo,
             sync_points,
+            sync_unlocks,
             respawn_ships,
             log_ships,
         )
@@ -475,6 +536,7 @@ fn handle_connected(
         client_id.0,
         team,
         HullKind::Fighter,
+        Loadout::default(),
         pose,
         bank,
         trigger.entity,
@@ -510,6 +572,32 @@ fn scatter_cargo(commands: &mut Commands, position: Vec2, amount: u16, tick: Tic
     }
 }
 
+/// Reduce a requested loadout to what's unlocked and stocked at the spawn
+/// facility (DESIGN §5): invalid slots fall back to defaults rather than
+/// blocking the spawn.
+fn validate_loadout(
+    requested: Loadout,
+    facility: fittings::SpawnFacility,
+    player: PeerId,
+    unlocks: &Unlocks,
+) -> Loadout {
+    let ok = |fitting: FittingId, slot: fittings::Slot| {
+        let def = fittings::def(fitting);
+        def.slot == slot
+            && unlocks.has(player, fitting)
+            && fittings::stocked_at(def.stocking, facility)
+    };
+    Loadout {
+        weapon: if ok(requested.weapon, fittings::Slot::Weapon) {
+            requested.weapon
+        } else {
+            FittingId::PulseCannon
+        },
+        utility: requested.utility.filter(|f| ok(*f, fittings::Slot::Utility)),
+        hull_mod: requested.hull_mod.filter(|f| ok(*f, fittings::Slot::HullMod)),
+    }
+}
+
 /// Mark a dead player's respawn as confirmed (their map click). Spawning
 /// happens in respawn_ships once the delay has also elapsed.
 fn receive_spawn_confirms(
@@ -534,6 +622,7 @@ fn receive_cheats(
     timeline: Res<LocalTimeline>,
     mut receivers: Query<(&RemoteId, &mut MessageReceiver<CheatOrder>), With<ClientOf>>,
     mut banks: ResMut<Banks>,
+    mut points_store: ResMut<PointsStore>,
     mut ships: Query<(
         &PlayerId,
         &Team,
@@ -549,6 +638,9 @@ fn receive_cheats(
         for cheat in receiver.receive() {
             info!("CHEAT from {:?}: {cheat:?}", client_id.0);
             match cheat {
+                CheatOrder::GivePoints(amount) => {
+                    points_store.award(client_id.0, amount);
+                }
                 CheatOrder::GiveOre(amount) => {
                     let total = banks.0.entry(client_id.0).or_insert(0);
                     *total += amount;
@@ -582,6 +674,7 @@ fn receive_cheats(
                             drone_id,
                             team.opponent(),
                             HullKind::Fighter,
+                            Loadout::default(),
                             (Position(pos), Rotation::default()),
                         ),
                         Bank(0),
@@ -646,20 +739,23 @@ fn receive_self_destructs(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_ship(
     commands: &mut Commands,
     client_id: PeerId,
     team: Team,
     kind: HullKind,
+    loadout: Loadout,
     pose: (Position, Rotation),
     bank: u32,
     link: Entity,
 ) {
     let entity = commands
         .spawn((
-            sim::ship_bundle(client_id, team, kind, pose),
+            sim::ship_bundle(client_id, team, kind, loadout, pose),
             Bank(bank),
             Points(0),
+            UnlockedFittings::default(),
             ShipPoseHistory::default(),
             Replicate::to_clients(NetworkTarget::All),
             PredictionTarget::to_clients(NetworkTarget::Single(client_id)),
@@ -806,6 +902,7 @@ fn respawn_ships(
     mut teams: ResMut<TeamAssignments>,
     mut banks: ResMut<Banks>,
     choices: Res<SpawnChoices>,
+    unlocks: Res<Unlocks>,
 ) {
     for (entity, mut task) in &mut tasks {
         task.ticks_remaining -= 1;
@@ -819,6 +916,7 @@ fn respawn_ships(
             let order = choices.0.get(&task.client_id).cloned().unwrap_or(SpawnOrder {
                 hull: HullKind::Fighter,
                 spawn_at: None,
+                loadout: Loadout::default(),
             });
             let desired = order.hull;
 
@@ -887,12 +985,23 @@ fn respawn_ships(
                     hulls::stats(HullKind::StrikeCarrier).width / 2.0 + 90.0,
                 ),
             };
-            info!("Respawning {:?} as {kind:?}", task.client_id);
+            let facility = if matches!(
+                (hulls::class(kind), carrier_spawn),
+                (hulls::HullClass::Combat, Some(_))
+            ) || (hulls::class(kind) == hulls::HullClass::Economy && carrier_spawn.is_some())
+            {
+                fittings::SpawnFacility::StrikeCarrier
+            } else {
+                fittings::SpawnFacility::Mothership
+            };
+            let loadout = validate_loadout(order.loadout, facility, task.client_id, &unlocks);
+            info!("Respawning {:?} as {kind:?} with {loadout:?}", task.client_id);
             spawn_ship(
                 &mut commands,
                 task.client_id,
                 team,
                 kind,
+                loadout,
                 pose,
                 *bank,
                 task.link,

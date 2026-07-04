@@ -217,10 +217,67 @@ impl TestNet {
             world.query_filtered::<&mut MessageSender<SpawnOrder>, With<Client>>();
         let mut sent = 0;
         for mut sender in query.iter_mut(world) {
-            sender.send::<OrdersChannel>(SpawnOrder { hull, spawn_at });
+            sender.send::<OrdersChannel>(SpawnOrder {
+                hull,
+                spawn_at,
+                loadout: Loadout::default(),
+            });
             sent += 1;
         }
         assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
+    }
+
+    /// Send a full spawn order including a fittings loadout.
+    pub fn client_send_spawn_order_loadout(
+        &mut self,
+        client_idx: usize,
+        hull: HullKind,
+        spawn_at: Option<Entity>,
+        loadout: Loadout,
+    ) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<SpawnOrder>, With<Client>>();
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(SpawnOrder {
+                hull,
+                spawn_at,
+                loadout,
+            });
+        }
+    }
+
+    /// Spend points on a fitting unlock, as the module tile would.
+    pub fn client_send_unlock(&mut self, client_idx: usize, fitting: FittingId) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<UnlockOrder>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(UnlockOrder { fitting });
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<UnlockOrder> on the client entity");
+    }
+
+    /// What a client's server-side ship actually spawned with.
+    pub fn server_ship_equipped(&mut self, client_id: u64) -> Option<Loadout> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &Equipped)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, equipped)| equipped.0)
+    }
+
+    /// Max health of a client's server-side ship.
+    pub fn server_ship_max_health(&mut self, client_id: u64) -> Option<u16> {
+        let world = self.server.world_mut();
+        let mut query = world.query::<(&PlayerId, &Health)>();
+        query
+            .iter(world)
+            .find(|(id, _)| id.0 == PeerId::Netcode(client_id))
+            .map(|(_, health)| health.max)
     }
 
     /// Toggle a client's automatic spawn confirmation (headless clients

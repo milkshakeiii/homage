@@ -328,8 +328,14 @@ holding map features.
   picking: Tab on the death screen cycles eligible friendly facilities (a
   map-screen version can come later). Deferred: facility stocking + refit
   radius move to M3 with fittings.
-- **M3 — points & fittings:** point awards; fitting unlocks; the §5 catalog's
-  tier-1 rows plus at least one exclusive tier-2 per slot type.
+- **M3 — points & fittings (done):** point awards (hits, kill bounties by
+  hull, deposits, asteroid cracks); fitting unlocks spending points, match-
+  permanent, validated against facility stocking with per-slot fallback;
+  implemented catalog: pulse cannon / scatter gun / long-lance railgun
+  (weapons), afterburner / blink thruster (utility, SHIFT), gyro tuning /
+  armor plate / lightweight frame / compacted hold (hull mods). Stocking
+  deviations until the outfitter + docking exist: outfitter-stocked items
+  live at the strike carrier, resource-controller items at any carrier.
 - **M3.5 — awareness UI (Henry, 2026-07-03):** corner minimap; hold **M**
   for a full-screen map (the natural home for the click-to-pick spawn point
   deferred from M2); hold **Tab** for the traditional scoreboard — both team

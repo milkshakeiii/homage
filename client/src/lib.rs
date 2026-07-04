@@ -498,6 +498,8 @@ fn send_cheats(
         Some(CheatOrder::Teleport(mouse.cursor))
     } else if keys.just_pressed(KeyCode::F6) {
         Some(CheatOrder::Heal)
+    } else if keys.just_pressed(KeyCode::F7) {
+        Some(CheatOrder::GivePoints(50))
     } else {
         None
     };
@@ -578,6 +580,9 @@ fn buffer_input(
     }
     if keypress.pressed(KeyCode::KeyD) || keypress.pressed(KeyCode::ArrowRight) {
         input.turn_right = true;
+    }
+    if keypress.pressed(KeyCode::ShiftLeft) || keypress.pressed(KeyCode::ShiftRight) {
+        input.ability = true;
     }
     let mouse_held = mouse_buttons.is_some_and(|m| m.pressed(MouseButton::Left));
     if keypress.pressed(KeyCode::Space) || mouse_held || taps.fire {

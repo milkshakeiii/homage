@@ -128,6 +128,7 @@ pub struct TurretAim(pub f32);
 pub struct SpawnOrder {
     pub hull: HullKind,
     pub spawn_at: Option<Entity>,
+    pub loadout: Loadout,
 }
 
 impl MapEntities for SpawnOrder {
@@ -157,6 +158,8 @@ pub struct SpawnConfirm;
 pub enum CheatOrder {
     /// Add ore to the bank without harvesting.
     GiveOre(u32),
+    /// Add points without earning them.
+    GivePoints(u32),
     /// Spawn an asteroid at a world position (usually the cursor).
     SpawnAsteroid(Vec2),
     /// Scatter a ring of ore fragments at a world position.
@@ -208,6 +211,67 @@ pub struct Bank(pub u32);
 /// persists through death; points buy fitting unlocks (M3).
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Points(pub u32);
+
+/// Every fitting in the game. Catalog data lives in `crate::fittings`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FittingId {
+    PulseCannon,
+    ScatterGun,
+    LongLance,
+    Afterburner,
+    BlinkThruster,
+    GyroTuning,
+    ArmorPlate,
+    LightweightFrame,
+    CompactedHold,
+}
+
+/// A ship's chosen fittings, one per slot (DESIGN §5).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Loadout {
+    pub weapon: FittingId,
+    pub utility: Option<FittingId>,
+    pub hull_mod: Option<FittingId>,
+}
+
+impl Default for Loadout {
+    fn default() -> Self {
+        Self {
+            weapon: FittingId::PulseCannon,
+            utility: None,
+            hull_mod: None,
+        }
+    }
+}
+
+/// What a ship actually spawned with (post-validation). Replicated so both
+/// the owner's sim (movement/firing effects) and other clients agree.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Equipped(pub Loadout);
+
+/// Cooldown state for the utility slot (blink). Predicted like Weapon so
+/// rollbacks replay it identically.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct UtilityState {
+    pub ready_at: Tick,
+}
+
+impl Default for UtilityState {
+    fn default() -> Self {
+        Self { ready_at: Tick(0) }
+    }
+}
+
+/// The player's match-permanent unlocks, mirrored onto the ship for the
+/// spawn-screen UI (sorted for deterministic replication).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct UnlockedFittings(pub Vec<FittingId>);
+
+/// Client → server: spend points to permanently unlock a fitting.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct UnlockOrder {
+    pub fitting: FittingId,
+}
 
 /// Per-player color within the team's hue band: friend-or-foe is readable at
 /// a glance, individuals still distinguishable.
@@ -305,6 +369,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SpawnConfirm>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<UnlockOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);
 
@@ -323,8 +389,11 @@ impl Plugin for ProtocolPlugin {
         app.component::<CargoHold>().replicate();
         app.component::<Bank>().replicate();
         app.component::<Points>().replicate();
+        app.component::<Equipped>().replicate();
+        app.component::<UnlockedFittings>().replicate();
 
         app.component::<Weapon>().replicate().predict();
+        app.component::<UtilityState>().replicate().predict();
 
         // Avian physics state. Position/Rotation are the visual components, so
         // they get interpolation (remote entities) and a correction function
