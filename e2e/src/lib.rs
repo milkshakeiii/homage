@@ -201,15 +201,49 @@ impl TestNet {
     /// Send a spawn order (next-hull choice) from a client, as the respawn
     /// menu would.
     pub fn client_send_spawn_order(&mut self, client_idx: usize, hull: HullKind) {
+        self.client_send_spawn_order_at(client_idx, hull, None);
+    }
+
+    /// Send a spawn order with an explicit facility choice. `spawn_at` must
+    /// be an entity in the *client's* world (a confirmed replicated copy).
+    pub fn client_send_spawn_order_at(
+        &mut self,
+        client_idx: usize,
+        hull: HullKind,
+        spawn_at: Option<Entity>,
+    ) {
         let world = self.clients[client_idx].world_mut();
         let mut query =
             world.query_filtered::<&mut MessageSender<SpawnOrder>, With<Client>>();
         let mut sent = 0;
         for mut sender in query.iter_mut(world) {
-            sender.send::<OrdersChannel>(SpawnOrder { hull });
+            sender.send::<OrdersChannel>(SpawnOrder { hull, spawn_at });
             sent += 1;
         }
         assert!(sent > 0, "no MessageSender<SpawnOrder> on the client entity");
+    }
+
+    /// The client's replicated entity for another player's ship (lightyear
+    /// 0.28 uses a single-entity model: the interpolated entity IS the
+    /// replicated one the server's mapper understands).
+    pub fn client_find_ship(&mut self, client_idx: usize, owner_id: u64) -> Option<Entity> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query::<(Entity, &PlayerId)>();
+        query
+            .iter(world)
+            .find(|(_, id)| id.0 == PeerId::Netcode(owner_id))
+            .map(|(entity, _)| entity)
+    }
+
+    /// A client's view of a mothership entity by team.
+    pub fn client_find_mothership(&mut self, client_idx: usize, team: Team) -> Option<Entity> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<(Entity, &Team), With<Mothership>>();
+        query
+            .iter(world)
+            .find(|(_, t)| **t == team)
+            .map(|(entity, _)| entity)
     }
 
     /// Send a self-destruct order from a client, as holding Backspace would.

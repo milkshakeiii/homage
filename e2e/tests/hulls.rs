@@ -164,6 +164,75 @@ fn kill_client(net: &mut TestNet, victim_id: u64) {
     );
 }
 
+/// Spawn-point choice: an economy hull defaults to the mothership but may
+/// explicitly choose a friendly carrier; requests for enemy facilities are
+/// ignored and fall back to the rules.
+#[test]
+fn fighter_can_choose_to_spawn_at_a_friendly_carrier() {
+    // Teams for [1,2,3,4] alternate: 2 and 4 share a team.
+    let mut net = TestNet::new(6609, &[1, 2, 3, 4]);
+    assert!(
+        net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 4),
+        "clients never connected"
+    );
+    net.teleport(2, Vec2::new(0.0, 3000.0), 0.0);
+    net.teleport(3, Vec2::new(0.0, -3000.0), 0.0);
+
+    // Client 4 becomes its team's carrier, parked forward.
+    net.set_bank(4, 100);
+    net.client_send_spawn_order(3, HullKind::StrikeCarrier);
+    net.run_ticks(32);
+    kill_client(&mut net, 4);
+    assert_eq!(net.server_ship_hull(4), Some(HullKind::StrikeCarrier));
+    let carrier_pos = Vec2::new(2500.0, -700.0);
+    net.teleport(4, carrier_pos, 0.0);
+    net.run_ticks(64); // let the position replicate
+
+    // Client 2 orders a FIGHTER at the carrier (economy hulls default to the
+    // mothership, so this only passes if the explicit choice is honored).
+    assert!(
+        net.run_until(256, |net| net.client_find_ship(1, 4).is_some()),
+        "client 2 never saw the carrier"
+    );
+    let carrier_entity = net.client_find_ship(1, 4).unwrap();
+    net.client_send_spawn_order_at(1, HullKind::Fighter, Some(carrier_entity));
+    net.run_ticks(32);
+    kill_client(&mut net, 2);
+    let (spawn_pos, _) = net.server_ship(2).unwrap();
+    assert!(
+        spawn_pos.distance(carrier_pos) < 300.0,
+        "fighter spawned {:.0} from the chosen carrier",
+        spawn_pos.distance(carrier_pos)
+    );
+}
+
+#[test]
+fn enemy_facility_requests_fall_back_to_your_mothership() {
+    let mut net = TestNet::new(6610, &[1, 2]);
+    assert!(net.run_until(CONNECT_TICKS, |net| net.server_ships().len() == 2));
+    let team2 = net.server_ship_team(2).unwrap();
+
+    // Client 2 asks to spawn at the ENEMY mothership.
+    assert!(
+        net.run_until(256, |net| net
+            .client_find_mothership(1, team2.opponent())
+            .is_some()),
+        "client never saw the enemy mothership"
+    );
+    let enemy_mothership = net.client_find_mothership(1, team2.opponent()).unwrap();
+    net.client_send_spawn_order_at(1, HullKind::Fighter, Some(enemy_mothership));
+    net.run_ticks(32);
+    kill_client(&mut net, 2);
+
+    let (spawn_pos, _) = net.server_ship(2).unwrap();
+    let own_anchor = sim::team_anchor(team2);
+    assert!(
+        spawn_pos.distance(own_anchor) < sim::SPAWN_RING_RADIUS + 100.0,
+        "ship should spawn at its OWN mothership, spawned {:.0} away",
+        spawn_pos.distance(own_anchor)
+    );
+}
+
 /// Self-destruct: the solo path to a new hull. Scuttling drops cargo like
 /// any death and the normal respawn (with the standing spawn order) follows.
 #[test]

@@ -75,10 +75,11 @@ struct TeamAssignments(std::collections::HashMap<PeerId, Team>);
 #[derive(Resource, Default)]
 pub struct Banks(pub std::collections::HashMap<PeerId, u32>);
 
-/// What each player wants to fly on their next spawn (from SpawnOrder
-/// messages). Costs are checked and deducted at spawn time.
+/// What each player wants to fly on their next spawn, and where (from
+/// SpawnOrder messages). Costs and facility eligibility are checked at
+/// spawn time.
 #[derive(Resource, Default)]
-struct SpawnChoices(std::collections::HashMap<PeerId, HullKind>);
+struct SpawnChoices(std::collections::HashMap<PeerId, SpawnOrder>);
 
 impl TeamAssignments {
     /// Existing assignment, or the team with fewer assigned players.
@@ -446,8 +447,11 @@ fn receive_spawn_orders(
 ) {
     for (client_id, mut receiver) in &mut receivers {
         for order in receiver.receive() {
-            info!("{:?} wants to spawn as {:?}", client_id.0, order.hull);
-            choices.0.insert(client_id.0, order.hull);
+            info!(
+                "{:?} wants to spawn as {:?} at {:?}",
+                client_id.0, order.hull, order.spawn_at
+            );
+            choices.0.insert(client_id.0, order);
         }
     }
 }
@@ -647,7 +651,8 @@ fn respawn_ships(
     mut commands: Commands,
     mut tasks: Query<(Entity, &mut RespawnTask)>,
     links: Query<(), With<ClientOf>>,
-    carriers: Query<(&Team, &Position, &HullKind), With<PlayerId>>,
+    carriers: Query<(Entity, &Team, &Position, &HullKind), With<PlayerId>>,
+    motherships: Query<(Entity, &Team, &Position), With<Mothership>>,
     mut teams: ResMut<TeamAssignments>,
     mut banks: ResMut<Banks>,
     choices: Res<SpawnChoices>,
@@ -661,22 +666,51 @@ fn respawn_ships(
         // Skip the respawn if the client disconnected while dead.
         if links.get(task.link).is_ok() {
             let team = teams.assign(task.client_id);
-            let desired = choices
-                .0
-                .get(&task.client_id)
-                .copied()
-                .unwrap_or(HullKind::Fighter);
+            let order = choices.0.get(&task.client_id).cloned().unwrap_or(SpawnOrder {
+                hull: HullKind::Fighter,
+                spawn_at: None,
+            });
+            let desired = order.hull;
 
-            // Facility rules (DESIGN §2/§6): combat hulls require a live
-            // friendly strike carrier and spawn beside it; economy and
-            // carrier-type hulls spawn at the mothership. A denied combat
-            // hull falls back to the free fighter without charging.
-            let carrier_pos = carriers
+            // Resolve the requested spawn facility, if it's still alive,
+            // friendly, and eligible for the hull class (DESIGN §2/§6):
+            // economy hulls spawn at the mothership or any friendly carrier,
+            // combat hulls require a carrier, carrier-types build at the
+            // mothership.
+            let requested_carrier = order.spawn_at.and_then(|e| {
+                carriers
+                    .get(e)
+                    .ok()
+                    .filter(|(_, t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
+                    .map(|(_, _, pos, _)| pos.0)
+            });
+            let requested_mothership = order.spawn_at.and_then(|e| {
+                motherships
+                    .get(e)
+                    .ok()
+                    .filter(|(_, t, _)| **t == team)
+                    .map(|(_, _, pos)| pos.0)
+            });
+            let any_carrier = carriers
                 .iter()
-                .find(|(t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
-                .map(|(_, pos, _)| pos.0);
+                .find(|(_, t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
+                .map(|(_, _, pos, _)| pos.0);
+
+            let carrier_spawn = match hulls::class(desired) {
+                hulls::HullClass::CarrierType => None,
+                hulls::HullClass::Combat => requested_carrier.or(any_carrier),
+                hulls::HullClass::Economy => {
+                    // An explicit mothership request (or no request) means
+                    // the mothership; otherwise honor the carrier choice.
+                    if requested_mothership.is_some() {
+                        None
+                    } else {
+                        requested_carrier
+                    }
+                }
+            };
             let allowed = match hulls::class(desired) {
-                hulls::HullClass::Combat => carrier_pos.is_some(),
+                hulls::HullClass::Combat => carrier_spawn.is_some(),
                 _ => true,
             };
 
@@ -692,14 +726,16 @@ fn respawn_ships(
                 HullKind::Fighter
             };
 
-            let pose = match (hulls::class(kind), carrier_pos) {
-                (hulls::HullClass::Combat, Some(center)) => sim::spawn_pose_at(
+            let pose = match (hulls::class(kind), carrier_spawn) {
+                (hulls::HullClass::CarrierType, _) | (_, None) => {
+                    sim::spawn_pose(task.client_id, team)
+                }
+                (_, Some(center)) => sim::spawn_pose_at(
                     task.client_id,
                     team,
                     center,
                     hulls::stats(HullKind::StrikeCarrier).width / 2.0 + 90.0,
                 ),
-                _ => sim::spawn_pose(task.client_id, team),
             };
             info!("Respawning {:?} as {kind:?}", task.client_id);
             spawn_ship(

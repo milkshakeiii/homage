@@ -119,12 +119,23 @@ pub enum HullKind {
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TurretAim(pub f32);
 
-/// Client → server: what to fly on the next (re)spawn. Applied when the
-/// respawn happens; costs are deducted then (hulls are lost on death,
-/// DESIGN §6).
+/// Client → server: what to fly on the next (re)spawn, and where. Applied
+/// when the respawn happens; costs are deducted then (hulls are lost on
+/// death, DESIGN §6). `spawn_at` is a replicated facility entity (mothership
+/// or friendly strike carrier); the server validates team and hull-class
+/// eligibility and falls back to the rules when it's missing or invalid.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SpawnOrder {
     pub hull: HullKind,
+    pub spawn_at: Option<Entity>,
+}
+
+impl MapEntities for SpawnOrder {
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
+        if let Some(entity) = &mut self.spawn_at {
+            *entity = entity_mapper.get_mapped(*entity);
+        }
+    }
 }
 
 /// Client → server: scuttle my ship. The only way to swap hulls without an
@@ -256,7 +267,8 @@ impl Plugin for ProtocolPlugin {
         })
         .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SpawnOrder>()
-            .add_direction(NetworkDirection::ClientToServer);
+            .add_direction(NetworkDirection::ClientToServer)
+            .add_map_entities();
         app.register_message::<SelfDestruct>()
             .add_direction(NetworkDirection::ClientToServer);
 

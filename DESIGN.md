@@ -307,9 +307,10 @@ holding map features.
   controller, strike carrier); Gunship archetype (corvette's mouse turret);
   Captain archetype (omnidirectional drift); resource controller as mobile
   dropoff; cold-start rules (combat hulls require a live carrier and spawn
-  beside it; carrier-types build at the mothership). Deferred: explicit
-  spawn-*point picking* UI (needs a map/death screen — for now placement is
-  rule-based); facility stocking + refit radius move to M3 with fittings.
+  beside it; carrier-types build at the mothership). Spawn-point
+  picking: Tab on the death screen cycles eligible friendly facilities (a
+  map-screen version can come later). Deferred: facility stocking + refit
+  radius move to M3 with fittings.
 - **M3 — points & fittings:** point awards; fitting unlocks; the §5 catalog's
   tier-1 rows plus at least one exclusive tier-2 per slot type.
 - **M4 — win condition & breadth:** mothership HP/kill flow, match reset,

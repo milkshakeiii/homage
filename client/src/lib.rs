@@ -344,17 +344,22 @@ fn setup_hud(mut commands: Commands) {
     ));
 }
 
-/// While dead: show the hull menu and let number keys pick what to fly next.
+/// While dead: show the hull menu, digit keys pick what to fly next, and Tab
+/// cycles which friendly facility (mothership / strike carrier) to spawn at.
 /// The choice is sent as a reliable SpawnOrder and applied (and paid for)
 /// when the respawn happens server-side.
 fn respawn_menu(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     alive: Query<&Team, (With<Predicted>, With<InputMarker<Inputs>>, With<PlayerId>)>,
-    fleet: Query<(&Team, &HullKind), With<PlayerId>>,
+    // lightyear 0.28 single-entity model: the interpolated/predicted entity
+    // IS the replicated one, so these entities map correctly in messages.
+    fleet: Query<(Entity, &Team, &HullKind, &PlayerId)>,
+    motherships: Query<(Entity, &Team), With<Mothership>>,
     mut menu: Query<(&mut Visibility, &mut Text), With<RespawnMenuText>>,
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
     mut chosen: Local<Option<HullKind>>,
+    mut chosen_facility: Local<Option<Entity>>,
     mut own_team: Local<Option<Team>>,
     mut died_at: Local<Option<f32>>,
 ) {
@@ -374,11 +379,21 @@ fn respawn_menu(
     // UI; the server is authoritative).
     let respawn_in =
         (sim::RESPAWN_DELAY_TICKS as f32 * sim::TICK_DT - (now - died)).max(0.0);
-    let have_carrier = own_team.is_some_and(|mine| {
-        fleet
-            .iter()
-            .any(|(team, kind)| *team == mine && *kind == HullKind::StrikeCarrier)
-    });
+    let mine = *own_team;
+    let friendly_carriers: Vec<(Entity, u64)> = mine
+        .map(|mine| {
+            let mut carriers: Vec<(Entity, u64)> = fleet
+                .iter()
+                .filter(|(_, team, kind, _)| {
+                    **team == mine && **kind == HullKind::StrikeCarrier
+                })
+                .map(|(entity, _, _, owner)| (entity, owner.0.to_bits()))
+                .collect();
+            carriers.sort_by_key(|(_, owner)| *owner);
+            carriers
+        })
+        .unwrap_or_default();
+    let have_carrier = !friendly_carriers.is_empty();
 
     const DIGITS: [KeyCode; 9] = [
         KeyCode::Digit1,
@@ -395,10 +410,58 @@ fn respawn_menu(
         .iter()
         .position(|key| keys.just_pressed(*key))
         .and_then(|i| hulls::PURCHASABLE.get(i).copied());
-    if let Some(hull) = picked {
+
+    // Eligible facilities for the current hull class, in stable order:
+    // mothership first (when allowed), then carriers by owner id.
+    let hull = picked.or(*chosen).unwrap_or(HullKind::Fighter);
+    let friendly_mothership = mine.and_then(|mine| {
+        motherships
+            .iter()
+            .find(|(_, team)| **team == mine)
+            .map(|(entity, _)| entity)
+    });
+    let mut eligible: Vec<(Entity, String)> = Vec::new();
+    match hulls::class(hull) {
+        hulls::HullClass::CarrierType => {
+            if let Some(m) = friendly_mothership {
+                eligible.push((m, "Mothership".into()));
+            }
+        }
+        hulls::HullClass::Combat => {
+            for (entity, owner) in &friendly_carriers {
+                eligible.push((*entity, format!("Carrier [{owner}]")));
+            }
+        }
+        hulls::HullClass::Economy => {
+            if let Some(m) = friendly_mothership {
+                eligible.push((m, "Mothership".into()));
+            }
+            for (entity, owner) in &friendly_carriers {
+                eligible.push((*entity, format!("Carrier [{owner}]")));
+            }
+        }
+    }
+
+    // Keep the current selection if still eligible, else take the first.
+    let mut index = eligible
+        .iter()
+        .position(|(e, _)| Some(*e) == *chosen_facility)
+        .unwrap_or(0);
+    let tabbed = keys.just_pressed(KeyCode::Tab) && !eligible.is_empty();
+    if tabbed {
+        index = (index + 1) % eligible.len();
+    }
+    let selection = eligible.get(index);
+    let selection_changed = selection.map(|(e, _)| *e) != *chosen_facility;
+    *chosen_facility = selection.map(|(e, _)| *e);
+
+    if picked.is_some() || tabbed || selection_changed {
         *chosen = Some(hull);
         if let Ok(mut sender) = sender.single_mut() {
-            sender.send::<OrdersChannel>(SpawnOrder { hull });
+            sender.send::<OrdersChannel>(SpawnOrder {
+                hull,
+                spawn_at: *chosen_facility,
+            });
         }
     }
 
@@ -427,7 +490,13 @@ fn respawn_menu(
     } else {
         "respawning…".to_string()
     };
-    text.0 = format!("SHIP DESTROYED — {status}\n{options}\nNext spawn: {next}");
+    let at = eligible
+        .get(index)
+        .map(|(_, label)| label.as_str())
+        .unwrap_or("—");
+    text.0 = format!(
+        "SHIP DESTROYED — {status}\n{options}\nNext spawn: {next} at {at}   [Tab] cycle spawn point"
+    );
 }
 
 fn log_hud_layout(
