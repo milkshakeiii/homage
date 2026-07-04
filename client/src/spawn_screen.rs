@@ -329,6 +329,8 @@ fn refresh_map_markers(
 fn map_facility_clicks(
     mut ui: ResMut<DeadUi>,
     mut state: ResMut<LoadoutState>,
+    wealth: Res<WealthCache>,
+    facility_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
     buttons: Query<(&Interaction, &MapFacilityButton), Changed<Interaction>>,
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
 ) {
@@ -337,6 +339,16 @@ fn map_facility_clicks(
             continue;
         }
         state.facility = Some(facility.0);
+        // The facility scopes the shop: if the standing hull can't deploy
+        // here, reset to the always-valid fighter and say why.
+        let kind = facility_kind(state.facility, &facility_lookup);
+        if let Err(reason) = hull_gate(state.hull, kind, wealth.bank) {
+            state.detail = format!(
+                "Selection reset to Fighter — {} can't deploy here.\n({reason})",
+                hulls::display_name(state.hull),
+            );
+            state.hull = HullKind::Fighter;
+        }
         if let Ok(mut sender) = sender.single_mut() {
             sender.send::<OrdersChannel>(SpawnOrder {
                 hull: state.hull,
@@ -568,11 +580,18 @@ fn dead_ui_lifecycle(
 
 fn hull_tile_clicks(
     mut state: ResMut<LoadoutState>,
-    mut tiles: Query<(&Interaction, &HullTile, &mut BackgroundColor), Changed<Interaction>>,
+    wealth: Res<WealthCache>,
+    facility_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
+    mut tiles: Query<(&Interaction, &HullTile), Changed<Interaction>>,
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
 ) {
-    for (interaction, tile, _) in &mut tiles {
+    for (interaction, tile) in &mut tiles {
         if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let facility = facility_kind(state.facility, &facility_lookup);
+        if let Err(reason) = hull_gate(tile.0, facility, wealth.bank) {
+            state.detail = format!("{}: {reason}", hulls::display_name(tile.0));
             continue;
         }
         state.hull = tile.0;
@@ -594,6 +613,54 @@ fn hull_tile_clicks(
             });
         }
     }
+}
+
+/// What kind of facility the player has selected on the map.
+#[derive(Clone, Copy, PartialEq)]
+enum FacilityKind {
+    Mothership,
+    StrikeCarrier,
+}
+
+fn facility_kind(
+    facility: Option<Entity>,
+    lookup: &Query<(Option<&Mothership>, Option<&HullKind>)>,
+) -> Option<FacilityKind> {
+    match lookup.get(facility?) {
+        Ok((Some(_), _)) => Some(FacilityKind::Mothership),
+        Ok((_, Some(HullKind::StrikeCarrier))) => Some(FacilityKind::StrikeCarrier),
+        _ => None,
+    }
+}
+
+/// Can this hull be bought and fielded right now? Err carries the reason the
+/// player sees. The server enforces the same rules; this is the honest UI.
+fn hull_gate(
+    kind: HullKind,
+    facility: Option<FacilityKind>,
+    bank: u32,
+) -> Result<(), String> {
+    let Some(facility) = facility else {
+        return Err("Choose a spawn point on the map first — press [M].".into());
+    };
+    let class_ok = match hulls::class(kind) {
+        hulls::HullClass::Economy => true,
+        hulls::HullClass::Combat => facility == FacilityKind::StrikeCarrier,
+        hulls::HullClass::CarrierType => facility == FacilityKind::Mothership,
+    };
+    if !class_ok {
+        return Err(match hulls::class(kind) {
+            hulls::HullClass::Combat => {
+                "Combat hulls deploy from a strike carrier — pick one on the map [M].".into()
+            }
+            _ => "Carrier-type hulls are built at the mothership — pick it on the map [M].".into(),
+        });
+    }
+    let cost = hulls::stats(kind).cost;
+    if cost > bank {
+        return Err(format!("Not enough ore: costs {cost}, you have {bank}."));
+    }
+    Ok(())
 }
 
 fn hull_requirement_note(kind: HullKind) -> &'static str {
@@ -629,12 +696,19 @@ fn module_tile_clicks(
 
 fn spawn_button_clicks(
     mut state: ResMut<LoadoutState>,
+    wealth: Res<WealthCache>,
+    facility_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
     buttons: Query<&Interaction, (With<SpawnButton>, Changed<Interaction>)>,
     mut orders: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
     mut confirms: Query<&mut MessageSender<SpawnConfirm>, With<Client>>,
 ) {
     for interaction in &buttons {
         if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let facility = facility_kind(state.facility, &facility_lookup);
+        if let Err(reason) = hull_gate(state.hull, facility, wealth.bank) {
+            state.detail = format!("Can't deploy: {reason}");
             continue;
         }
         if let Ok(mut sender) = orders.single_mut() {
@@ -686,6 +760,7 @@ fn update_screen_texts(
         Query<&mut Text, With<FacilityContextText>>,
         Query<&mut Text, With<SpawnButtonText>>,
     )>,
+    gate_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
     mut hull_tiles: Query<(&HullTile, &mut BackgroundColor)>,
 ) {
     if *ui == DeadUi::Hidden {
@@ -755,10 +830,11 @@ fn update_screen_texts(
             "SPAWN".into()
         };
     }
+    let facility = facility_kind(state.facility, &gate_lookup);
     for (tile, mut bg) in &mut hull_tiles {
         bg.0 = if tile.0 == state.hull {
             TILE_SELECTED
-        } else if hulls::stats(tile.0).cost > wealth.bank {
+        } else if hull_gate(tile.0, facility, wealth.bank).is_err() {
             TILE_DISABLED
         } else {
             TILE_BG
