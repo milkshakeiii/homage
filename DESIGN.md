@@ -259,10 +259,26 @@ clip a careless fighter.
 
 ## 7. Spawning & death
 
-**Spawn flow (APPROVED):** while dead you see the map and pick a spawn point
-from your team's eligible facilities, then pick a hull you can afford (starter
-fighter is always free). Respawn delay ~3 s for small hulls, scaling up with
-hull class. Spawn loadout follows the facility-stocking rule in §5.
+**Spawn flow (APPROVED — Henry, 2026-07-04):** no auto-respawn. Death opens
+the **map screen**: click a friendly facility to spawn from (eligibility by
+hull class, §2). Then the **loadout screen** (Savage XR's layout: weapons and
+items grids with a detail panel on the left; hulls row, big hull preview,
+equipped slots, and a SPAWN button on the right; ore + points readouts).
+Map-first matters: the chosen facility scopes the shop — which hulls it can
+field and which modules it stocks. You can hop back to the map freely; SPAWN
+deploys you (the ~3 s respawn delay is only the *earliest* moment — an early
+click queues). Omitted from Savage's screen: COMMAND (no commander), Request
+(nobody to request from), item stock counts (our stocking is about *where*,
+not *how many*). Presets (saved loadouts) are a later nicety.
+
+**Docking & refit (APPROVED — Henry, 2026-07-04):** the loadout screen is
+always "the docked UI" — death is just being force-docked with a facility
+still to choose. Flying into a friendly facility's refit radius and holding
+the dock key stows your ship and opens the same screen; leaving it undocks
+you *at that facility* with hull, health, and cargo intact — a refit trip is
+a pit stop, not a death tax (the cost is the flying time, per §5). Equipment
+changes only happen docked, limited to what the facility stocks; docking at
+a dropoff facility deposits your hold while you shop.
 
 **Hulls are lost on death (APPROVED):** a purchased hull is gone when it dies;
 buy another. Combined with permanent fitting unlocks and banked
