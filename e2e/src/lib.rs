@@ -260,6 +260,17 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<UnlockOrder> on the client entity");
     }
 
+    /// The client's last-known wealth cache (fed by ship components while
+    /// alive and WealthUpdate messages while dead).
+    pub fn client_wealth(&mut self, client_idx: usize) -> (u32, u32, Vec<FittingId>) {
+        let cache = self.clients[client_idx]
+            .world()
+            .resource::<homage_client::WealthCache>();
+        let mut unlocked: Vec<FittingId> = cache.unlocked.iter().copied().collect();
+        unlocked.sort();
+        (cache.bank, cache.points, unlocked)
+    }
+
     /// What a client's server-side ship actually spawned with.
     pub fn server_ship_equipped(&mut self, client_id: u64) -> Option<Loadout> {
         let world = self.server.world_mut();

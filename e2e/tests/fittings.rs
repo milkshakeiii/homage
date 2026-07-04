@@ -214,3 +214,36 @@ fn afterburner_raises_the_speed_cap() {
         sim::MAX_SPEED
     );
 }
+
+/// The bug Henry hit: unlocks happen on the death screen, where the ship
+/// components that mirror wealth don't exist. The server must answer unlock
+/// orders with an authoritative WealthUpdate so the dead client can see the
+/// unlock (and then equip it).
+#[test]
+fn unlocking_while_dead_reports_back() {
+    let mut net = connect_one(6905);
+    net.client_send_cheat(0, CheatOrder::GivePoints(50));
+    assert!(net.run_until(256, |net| net.server_points(1) == 50));
+
+    // Die, stay dead (no auto-confirm), and unlock from the death screen.
+    net.set_auto_spawn(0, false);
+    net.teleport(1, Vec2::new(2500.0, 2500.0), 0.0);
+    net.run_ticks(8);
+    net.client_send_self_destruct(0);
+    assert!(net.run_until(256, |net| net.server_ship(1).is_none()));
+
+    net.client_send_unlock(0, FittingId::Afterburner);
+    let cost = fittings::def(FittingId::Afterburner).cost;
+    assert!(
+        net.run_until(256, |net| net.server_points(1) == 50 - cost),
+        "unlock never processed while dead"
+    );
+    assert!(
+        net.run_until(256, |net| {
+            let (_, points, unlocked) = net.client_wealth(0);
+            points == 50 - cost && unlocked.contains(&FittingId::Afterburner)
+        }),
+        "dead client never learned about its unlock: {:?}",
+        net.client_wealth(0)
+    );
+}

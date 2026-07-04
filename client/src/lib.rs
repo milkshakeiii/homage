@@ -54,6 +54,37 @@ impl ClientConfig {
 #[derive(Resource)]
 pub struct AutoSpawn(pub bool);
 
+/// Last-known wealth and unlocks. Mirrored from ship components while alive
+/// and from authoritative WealthUpdate messages (which also work while dead,
+/// when the ship components don't exist).
+#[derive(Resource, Default)]
+pub struct WealthCache {
+    pub bank: u32,
+    pub points: u32,
+    pub unlocked: std::collections::HashSet<FittingId>,
+}
+
+impl WealthCache {
+    pub fn has_unlock(&self, fitting: FittingId) -> bool {
+        homage_shared::fittings::def(fitting).cost == 0 || self.unlocked.contains(&fitting)
+    }
+}
+
+/// Consume authoritative wealth snapshots (sent after unlock orders). Runs
+/// in Update in both modes: receivers are cleared every frame.
+fn receive_wealth_updates(
+    mut receivers: Query<&mut MessageReceiver<WealthUpdate>, With<Client>>,
+    mut cache: ResMut<WealthCache>,
+) {
+    for mut receiver in &mut receivers {
+        for update in receiver.receive() {
+            cache.bank = update.bank;
+            cache.points = update.points;
+            cache.unlocked = update.unlocked.iter().copied().collect();
+        }
+    }
+}
+
 /// When true, the client ignores the keyboard and constantly thrusts, turns,
 /// and fires — a self-driving client for testing without a human.
 #[derive(Resource)]
@@ -140,7 +171,8 @@ pub fn build_client_app(config: ClientConfig) -> App {
     ));
 
     app.add_systems(Startup, connect);
-    app.add_systems(Update, auto_confirm_spawn);
+    app.init_resource::<WealthCache>();
+    app.add_systems(Update, (auto_confirm_spawn, receive_wealth_updates));
     app.add_systems(
         FixedPreUpdate,
         buffer_input.in_set(InputSystems::WriteClientInputs),
@@ -363,7 +395,13 @@ fn update_hud(
     >,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
-    let (Ok((bank, points, cargo)), Ok(mut text)) = (ship.single(), hud.single_mut()) else {
+    let Ok(mut text) = hud.single_mut() else {
+        return;
+    };
+    let Ok((bank, points, cargo)) = ship.single() else {
+        // Dead: the spawn screen owns the display; a frozen HUD would keep
+        // showing stale warnings (e.g. the self-destruct countdown).
+        text.0 = String::new();
         return;
     };
     let bank = bank.map_or(0, |b| b.0);

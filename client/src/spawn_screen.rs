@@ -15,6 +15,7 @@ use avian2d::prelude::Position;
 use bevy::prelude::*;
 use homage_shared::protocol::*;
 use homage_shared::{fittings, hulls, sim};
+use crate::WealthCache;
 use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::*;
 use lightyear::prelude::*;
@@ -48,21 +49,6 @@ impl Default for LoadoutState {
             confirmed: false,
             detail: String::new(),
         }
-    }
-}
-
-/// Bank/points survive death server-side but the components die with the
-/// ship; cache the last-seen values for dead-time display.
-#[derive(Resource, Default)]
-struct WealthCache {
-    bank: u32,
-    points: u32,
-    unlocked: std::collections::HashSet<FittingId>,
-}
-
-impl WealthCache {
-    fn has_unlock(&self, fitting: FittingId) -> bool {
-        homage_shared::fittings::def(fitting).cost == 0 || self.unlocked.contains(&fitting)
     }
 }
 
@@ -113,7 +99,6 @@ impl Plugin for SpawnScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeadUi>();
         app.init_resource::<LoadoutState>();
-        app.init_resource::<WealthCache>();
         app.add_systems(Startup, (setup_map_screen, setup_loadout_screen));
         app.add_systems(
             Update,
@@ -201,7 +186,7 @@ fn setup_map_screen(mut commands: Commands) {
             ));
             root.spawn((
                 text(
-                    "click a highlighted facility to deploy there   ·   [L] loadout",
+                    "click a highlighted facility to deploy there   |   [L] loadout",
                     16.0,
                     DIM,
                 ),
@@ -324,7 +309,7 @@ fn map_facility_clicks(
         let kind = facility_kind(state.facility, &facility_lookup);
         if let Err(reason) = hull_gate(state.hull, kind, wealth.bank) {
             state.detail = format!(
-                "Selection reset to Fighter — {} can't deploy here.\n({reason})",
+                "Selection reset to Fighter: {} cannot deploy here.\n({reason})",
                 hulls::display_name(state.hull),
             );
             state.hull = HullKind::Fighter;
@@ -588,7 +573,7 @@ fn hull_tile_clicks(
         state.hull = tile.0;
         let stats = hulls::stats(tile.0);
         state.detail = format!(
-            "{} — {}\n{}",
+            "{}: {}\n{}",
             hulls::display_name(tile.0),
             match stats.archetype {
                 hulls::Archetype::Pilot => "Pilot: you are the weapon.",
@@ -633,7 +618,7 @@ fn hull_gate(
     bank: u32,
 ) -> Result<(), String> {
     let Some(facility) = facility else {
-        return Err("Choose a spawn point on the map first — press [M].".into());
+        return Err("Choose a spawn point on the map first - press [M].".into());
     };
     let class_ok = match hulls::class(kind) {
         hulls::HullClass::Economy => true,
@@ -643,9 +628,9 @@ fn hull_gate(
     if !class_ok {
         return Err(match hulls::class(kind) {
             hulls::HullClass::Combat => {
-                "Combat hulls deploy from a strike carrier — pick one on the map [M].".into()
+                "Combat hulls deploy from a strike carrier - pick one on the map [M].".into()
             }
-            _ => "Carrier-type hulls are built at the mothership — pick it on the map [M].".into(),
+            _ => "Carrier-type hulls are built at the mothership - pick it on the map [M].".into(),
         });
     }
     let cost = hulls::stats(kind).cost;
@@ -687,7 +672,7 @@ fn module_tile_clicks(
         if !wealth.has_unlock(tile.0) {
             if wealth.points < def.cost {
                 state.detail = format!(
-                    "{} — {}\n{stocked_note}\nUnlock costs {} pts; you have {}.",
+                    "{}: {}\n{stocked_note}\nUnlock costs {} pts; you have {}.",
                     def.name, def.blurb, def.cost, wealth.points
                 );
             } else {
@@ -695,7 +680,7 @@ fn module_tile_clicks(
                     sender.send::<OrdersChannel>(UnlockOrder { fitting: tile.0 });
                 }
                 state.detail = format!(
-                    "{} — unlocking for {} pts (yours for the match). Click again to equip.",
+                    "{}: unlocking for {} pts (yours for the match). Click again to equip.",
                     def.name, def.cost
                 );
             }
@@ -716,7 +701,7 @@ fn module_tile_clicks(
             .unwrap_or(false);
         if !stocked_here {
             state.detail = format!(
-                "{} — {}\nNot stocked at this facility ({stocked_note}). Pick another spawn point [M].",
+                "{}: {}\nNot stocked at this facility ({stocked_note}). Pick another spawn point [M].",
                 def.name, def.blurb
             );
             continue;
@@ -732,7 +717,7 @@ fn module_tile_clicks(
                     (state.loadout.hull_mod != Some(tile.0)).then_some(tile.0);
             }
         }
-        state.detail = format!("{} — equipped.\n{}", def.name, def.blurb);
+        state.detail = format!("{} equipped.\n{}", def.name, def.blurb);
         if let Ok(mut sender) = spawn_orders.single_mut() {
             sender.send::<OrdersChannel>(SpawnOrder {
                 hull: state.hull,
@@ -828,9 +813,9 @@ fn update_screen_texts(
 
     if let Ok(mut t) = texts.p0().single_mut() {
         t.0 = if ready {
-            "SELECT SPAWN POINT — ready to deploy".to_string()
+            "SELECT SPAWN POINT - ready to deploy".to_string()
         } else {
-            format!("SELECT SPAWN POINT — deployable in {ready_in:.1}s")
+            format!("SELECT SPAWN POINT - deployable in {ready_in:.1}s")
         };
     }
     if let Ok(mut t) = texts.p1().single_mut() {
@@ -855,7 +840,7 @@ fn update_screen_texts(
             "none (hull is unarmed)"
         };
         let slot = |f: Option<FittingId>| {
-            f.map(|f| fittings::def(f).name).unwrap_or("— empty —")
+            f.map(|f| fittings::def(f).name).unwrap_or("(empty)")
         };
         t.0 = format!(
             "Weapon: {weapon}\nUtility: {}\nHull mod: {}",
@@ -864,11 +849,11 @@ fn update_screen_texts(
         );
     }
     if let Ok(mut t) = texts.p4().single_mut() {
-        t.0 = format!("{} ore   ·   {} pts", wealth.bank, wealth.points);
+        t.0 = format!("{} ore   |   {} pts", wealth.bank, wealth.points);
     }
     if let Ok(mut t) = texts.p5().single_mut() {
         let facility = match state.facility {
-            None => "no spawn point — press [M]".to_string(),
+            None => "no spawn point - press [M]".to_string(),
             Some(entity) => match facility_lookup.get(entity) {
                 Ok((Some(_), _)) => "Mothership".to_string(),
                 Ok((_, Some(owner))) => {
@@ -878,14 +863,14 @@ fn update_screen_texts(
                         .unwrap_or("Carrier");
                     format!("{} [{}]", hull, owner.0.to_bits())
                 }
-                _ => "(facility lost — press [M])".to_string(),
+                _ => "(facility lost - press [M])".to_string(),
             },
         };
         t.0 = format!("Spawning at: {facility}   [M] map");
     }
     if let Ok(mut t) = texts.p6().single_mut() {
         t.0 = if state.confirmed {
-            if ready { "DEPLOYING…".into() } else { format!("DEPLOY IN {ready_in:.1}") }
+            if ready { "DEPLOYING...".into() } else { format!("DEPLOY IN {ready_in:.1}") }
         } else {
             "SPAWN".into()
         };

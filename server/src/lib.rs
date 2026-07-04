@@ -111,12 +111,22 @@ impl Unlocks {
 /// Spend points to unlock a fitting; idempotent and refuses on insufficient
 /// points.
 fn receive_unlock_orders(
-    mut receivers: Query<(&RemoteId, &mut MessageReceiver<UnlockOrder>), With<ClientOf>>,
+    mut receivers: Query<
+        (
+            &RemoteId,
+            &mut MessageReceiver<UnlockOrder>,
+            &mut MessageSender<WealthUpdate>,
+        ),
+        With<ClientOf>,
+    >,
     mut unlocks: ResMut<Unlocks>,
     mut points: ResMut<PointsStore>,
+    banks: Res<Banks>,
 ) {
-    for (client_id, mut receiver) in &mut receivers {
+    for (client_id, mut receiver, mut sender) in &mut receivers {
+        let mut respond = false;
         for order in receiver.receive() {
+            respond = true;
             let def = fittings::def(order.fitting);
             if unlocks.has(client_id.0, order.fitting) {
                 continue;
@@ -132,6 +142,21 @@ fn receive_unlock_orders(
             *balance -= def.cost;
             unlocks.0.entry(client_id.0).or_default().insert(order.fitting);
             info!("{:?} unlocked {:?} for {} pts", client_id.0, order.fitting, def.cost);
+        }
+        // Answer with the authoritative snapshot: the ship components that
+        // normally mirror wealth are dead exactly when unlocks happen.
+        if respond {
+            let mut unlocked: Vec<FittingId> = unlocks
+                .0
+                .get(&client_id.0)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_default();
+            unlocked.sort();
+            sender.send::<OrdersChannel>(WealthUpdate {
+                bank: banks.0.get(&client_id.0).copied().unwrap_or(0),
+                points: points.0.get(&client_id.0).copied().unwrap_or(0),
+                unlocked,
+            });
         }
     }
 }

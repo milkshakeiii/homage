@@ -273,6 +273,17 @@ pub struct UnlockOrder {
     pub fitting: FittingId,
 }
 
+/// Server → client: authoritative wealth + unlocks snapshot. Sent after
+/// unlock orders (and on demand) because the ship components that normally
+/// mirror these die with the ship — and unlocking happens on the death
+/// screen.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct WealthUpdate {
+    pub bank: u32,
+    pub points: u32,
+    pub unlocked: Vec<FittingId>,
+}
+
 /// Per-player color within the team's hue band: friend-or-foe is readable at
 /// a glance, individuals still distinguishable.
 pub fn color_from_id(client_id: PeerId, team: Team) -> Color {
@@ -361,7 +372,7 @@ impl Plugin for ProtocolPlugin {
             mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
             ..default()
         })
-        .add_direction(NetworkDirection::ClientToServer);
+        .add_direction(NetworkDirection::Bidirectional);
         app.register_message::<SpawnOrder>()
             .add_direction(NetworkDirection::ClientToServer)
             .add_map_entities();
@@ -371,6 +382,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<UnlockOrder>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<WealthUpdate>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);
 
