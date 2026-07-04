@@ -60,6 +60,10 @@ adding a crate to be slow.
   position doesn't.
 - The client verifies smooth rendering empirically: run with
   `HOMAGE_MOTION_DEBUG=1` and check the fraction of zero-delta frames.
+- Bump `PROTOCOL_VERSION` in `shared/src/lib.rs` whenever the wire format
+  changes (components/messages/channels/inputs in `protocol.rs`). Mismatched
+  builds then refuse to connect instead of silently dropping unknown
+  messages — restart BOTH server and client binaries after pulling.
 - Island sleeping is disabled in avian (incompatible with rollbacks); the
   IslandPlugin itself must stay (see `shared/src/lib.rs`).
 - `app.set_error_handler(bevy::ecs::error::warn)` on the server: ECS command

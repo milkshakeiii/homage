@@ -521,15 +521,22 @@ fn self_destruct(
     mut hold: ResMut<SelfDestructHold>,
     mut sender: Query<&mut MessageSender<SelfDestruct>, With<Client>>,
 ) {
-    if alive.is_empty() || !keys.pressed(KeyCode::Backspace) {
+    // HOMAGE_AUTO_SCUTTLE=1: act as if Backspace is held once the ship has
+    // been alive a few seconds (drives the full path without a keyboard).
+    let auto = std::env::var("HOMAGE_AUTO_SCUTTLE").is_ok() && time.elapsed_secs() > 6.0;
+    if alive.is_empty() || !(keys.pressed(KeyCode::Backspace) || auto) {
         hold.0 = 0.0;
         return;
     }
     let before = hold.0;
     hold.0 += time.delta_secs();
     if before < SELF_DESTRUCT_HOLD_SECS && hold.0 >= SELF_DESTRUCT_HOLD_SECS {
-        if let Ok(mut sender) = sender.single_mut() {
-            sender.send::<OrdersChannel>(SelfDestruct);
+        match sender.single_mut() {
+            Ok(mut sender) => {
+                sender.send::<OrdersChannel>(SelfDestruct);
+                info!("SelfDestruct sent");
+            }
+            Err(e) => warn!("SelfDestruct not sent, no sender: {e}"),
         }
     }
 }

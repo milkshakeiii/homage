@@ -21,7 +21,13 @@ pub const SERVER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHO
 /// How often the server sends replication updates to clients.
 pub const SEND_INTERVAL: Duration = Duration::from_millis(50);
 
-pub const PROTOCOL_ID: u64 = 0x484f_4d41_4745; // "HOMAGE"
+/// Bump this whenever the wire format changes (protocol.rs: components,
+/// messages, channels, input struct). It feeds PROTOCOL_ID, so a stale
+/// server and a new client refuse to connect outright instead of silently
+/// dropping the messages one side doesn't know (which reads as "the feature
+/// doesn't work" in playtests).
+pub const PROTOCOL_VERSION: u64 = 2;
+pub const PROTOCOL_ID: u64 = 0x484f_4d41_4745 ^ (PROTOCOL_VERSION << 48); // "HOMAGE" + version
 pub const PRIVATE_KEY: [u8; 32] = [0; 32];
 
 /// Protocol + physics + shared simulation systems, added by both binaries.
