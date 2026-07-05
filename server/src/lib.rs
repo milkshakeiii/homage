@@ -687,9 +687,16 @@ fn deposit_cargo(
     let dropoffs: Vec<(Vec2, Team, f32)> = motherships
         .iter()
         .map(|(pos, team)| (pos.0, *team, sim::DEPOSIT_RADIUS))
-        .chain(controllers.iter().filter_map(|(pos, team, kind)| {
-            (*kind == HullKind::ResourceController)
-                .then_some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+        .chain(controllers.iter().filter_map(|(pos, team, kind)| match kind {
+            HullKind::ResourceController => {
+                Some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+            }
+            HullKind::FleetCarrier => Some((
+                pos.0,
+                *team,
+                hulls::stats(HullKind::FleetCarrier).width / 2.0 + 110.0,
+            )),
+            _ => None,
         }))
         .collect();
     for (player, team, position, mut hold, mut bank) in &mut ships {
@@ -1153,8 +1160,8 @@ fn respawn_ships(
                 carriers
                     .get(e)
                     .ok()
-                    .filter(|(_, t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
-                    .map(|(_, _, pos, _)| pos.0)
+                    .filter(|(_, t, _, k)| **t == team && hulls::is_spawn_carrier(**k))
+                    .map(|(_, _, pos, k)| (pos.0, *k))
             });
             let requested_mothership = order.spawn_at.and_then(|e| {
                 motherships
@@ -1165,8 +1172,8 @@ fn respawn_ships(
             });
             let any_carrier = carriers
                 .iter()
-                .find(|(_, t, _, k)| **t == team && **k == HullKind::StrikeCarrier)
-                .map(|(_, _, pos, _)| pos.0);
+                .find(|(_, t, _, k)| **t == team && hulls::is_spawn_carrier(**k))
+                .map(|(_, _, pos, k)| (pos.0, *k));
 
             let carrier_spawn = match hulls::class(desired) {
                 hulls::HullClass::CarrierType => None,
@@ -1202,21 +1209,19 @@ fn respawn_ships(
                 (hulls::HullClass::CarrierType, _) | (_, None) => {
                     sim::spawn_pose(task.client_id, team)
                 }
-                (_, Some(center)) => sim::spawn_pose_at(
+                (_, Some((center, carrier_kind))) => sim::spawn_pose_at(
                     task.client_id,
                     team,
                     center,
-                    hulls::stats(HullKind::StrikeCarrier).width / 2.0 + 90.0,
+                    hulls::stats(carrier_kind).width / 2.0 + 90.0,
                 ),
             };
-            let facility = if matches!(
-                (hulls::class(kind), carrier_spawn),
-                (hulls::HullClass::Combat, Some(_))
-            ) || (hulls::class(kind) == hulls::HullClass::Economy && carrier_spawn.is_some())
-            {
-                fittings::SpawnFacility::StrikeCarrier
-            } else {
-                fittings::SpawnFacility::Mothership
+            let facility = match (hulls::class(kind), carrier_spawn) {
+                (hulls::HullClass::CarrierType, _) | (_, None) => {
+                    fittings::SpawnFacility::Mothership
+                }
+                (_, Some((_, HullKind::FleetCarrier))) => fittings::SpawnFacility::FleetCarrier,
+                (_, Some(_)) => fittings::SpawnFacility::StrikeCarrier,
             };
             let loadout = validate_loadout(order.loadout, facility, task.client_id, &unlocks);
             info!("Respawning {:?} as {kind:?} with {loadout:?}", task.client_id);

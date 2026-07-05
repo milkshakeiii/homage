@@ -114,6 +114,7 @@ pub enum HullKind {
     Bomber,
     ResourceController,
     StrikeCarrier,
+    FleetCarrier,
 }
 
 /// Where a Gunship hull's turret points (world-space radians). Written from

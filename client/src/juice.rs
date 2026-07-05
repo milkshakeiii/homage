@@ -404,9 +404,16 @@ fn draw_deposit_beam(
     let dropoffs = motherships
         .iter()
         .map(|(pos, team)| (pos.0, *team, sim::DEPOSIT_RADIUS))
-        .chain(controllers.iter().filter_map(|(pos, team, kind)| {
-            (*kind == HullKind::ResourceController)
-                .then_some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+        .chain(controllers.iter().filter_map(|(pos, team, kind)| match kind {
+            HullKind::ResourceController => {
+                Some((pos.0, *team, sim::CONTROLLER_DEPOSIT_RADIUS))
+            }
+            HullKind::FleetCarrier => Some((
+                pos.0,
+                *team,
+                homage_shared::hulls::stats(HullKind::FleetCarrier).width / 2.0 + 110.0,
+            )),
+            _ => None,
         }));
     for (dropoff_pos, dropoff_team, radius) in dropoffs {
         if dropoff_team != *ship_team || dropoff_pos.distance(ship_pos.0) > radius {

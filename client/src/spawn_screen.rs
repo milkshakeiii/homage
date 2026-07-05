@@ -286,7 +286,7 @@ fn refresh_map_markers(
         }
         for (entity, position, team, kind, color) in &ships {
             let friendly = mine == Some(*team);
-            let clickable = friendly && *kind == HullKind::StrikeCarrier;
+            let clickable = friendly && hulls::is_spawn_carrier(*kind);
             let size = if clickable { 16.0 } else { 7.0 } * scale;
             let marker_color = if friendly || mine.is_none() {
                 color.0
@@ -848,6 +848,7 @@ fn hull_tile_clicks(
 enum FacilityKind {
     Mothership,
     StrikeCarrier,
+    FleetCarrier,
 }
 
 fn facility_kind(
@@ -857,6 +858,7 @@ fn facility_kind(
     match lookup.get(facility?) {
         Ok((Some(_), _)) => Some(FacilityKind::Mothership),
         Ok((_, Some(HullKind::StrikeCarrier))) => Some(FacilityKind::StrikeCarrier),
+        Ok((_, Some(HullKind::FleetCarrier))) => Some(FacilityKind::FleetCarrier),
         _ => None,
     }
 }
@@ -873,7 +875,10 @@ fn hull_gate(
     };
     let class_ok = match hulls::class(kind) {
         hulls::HullClass::Economy => true,
-        hulls::HullClass::Combat => facility == FacilityKind::StrikeCarrier,
+        hulls::HullClass::Combat => matches!(
+            facility,
+            FacilityKind::StrikeCarrier | FacilityKind::FleetCarrier
+        ),
         hulls::HullClass::CarrierType => facility == FacilityKind::Mothership,
     };
     if !class_ok {
@@ -947,6 +952,10 @@ fn module_tile_clicks(
                 FacilityKind::StrikeCarrier => fittings::stocked_at(
                     def.stocking,
                     fittings::SpawnFacility::StrikeCarrier,
+                ),
+                FacilityKind::FleetCarrier => fittings::stocked_at(
+                    def.stocking,
+                    fittings::SpawnFacility::FleetCarrier,
                 ),
             })
             .unwrap_or(false);
@@ -1132,6 +1141,7 @@ fn update_screen_texts(
     let spawn_facility = facility.map(|f| match f {
         FacilityKind::Mothership => fittings::SpawnFacility::Mothership,
         FacilityKind::StrikeCarrier => fittings::SpawnFacility::StrikeCarrier,
+        FacilityKind::FleetCarrier => fittings::SpawnFacility::FleetCarrier,
     });
     for (tile, mut bg) in &mut module_tiles {
         let def = fittings::def(tile.0);

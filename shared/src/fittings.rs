@@ -29,14 +29,19 @@ pub enum Stocking {
 pub enum SpawnFacility {
     Mothership,
     StrikeCarrier,
+    FleetCarrier,
 }
 
 pub fn stocked_at(stocking: Stocking, facility: SpawnFacility) -> bool {
     match stocking {
         Stocking::Everywhere => true,
-        Stocking::AnyCarrier | Stocking::StrikeCarrierOnly => {
-            facility == SpawnFacility::StrikeCarrier
-        }
+        Stocking::AnyCarrier => matches!(
+            facility,
+            SpawnFacility::StrikeCarrier | SpawnFacility::FleetCarrier
+        ),
+        // The strike/fleet asymmetry (DESIGN §6): the best weapons and
+        // frames come off the strike carrier only.
+        Stocking::StrikeCarrierOnly => facility == SpawnFacility::StrikeCarrier,
     }
 }
 

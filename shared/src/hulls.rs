@@ -168,6 +168,24 @@ const STRIKE_CARRIER: HullStats = HullStats {
     weapon: None,
 };
 
+/// The infrastructure carrier (DESIGN §6): dropoff + spawn host + the sole
+/// builder of sub-carriers (outfitter, next slice). The strike carrier gets
+/// the best hulls; the fleet carrier is where logistics lives.
+const FLEET_CARRIER: HullStats = HullStats {
+    archetype: Archetype::Captain,
+    cost: 80,
+    health: 30,
+    cargo_capacity: 0,
+    accel: 110.0,
+    brake: 160.0,
+    turn_speed: 0.0,
+    max_speed: 95.0,
+    length: 150.0,
+    width: 150.0,
+    hit_radius: 70.0,
+    weapon: None,
+};
+
 pub fn stats(kind: HullKind) -> &'static HullStats {
     match kind {
         HullKind::Fighter => &FIGHTER,
@@ -176,18 +194,25 @@ pub fn stats(kind: HullKind) -> &'static HullStats {
         HullKind::Bomber => &BOMBER,
         HullKind::ResourceController => &RESOURCE_CONTROLLER,
         HullKind::StrikeCarrier => &STRIKE_CARRIER,
+        HullKind::FleetCarrier => &FLEET_CARRIER,
     }
 }
 
 /// Hulls offered in the respawn menu, in display order.
-pub const PURCHASABLE: [HullKind; 6] = [
+pub const PURCHASABLE: [HullKind; 7] = [
     HullKind::Fighter,
     HullKind::Harvester,
     HullKind::Corvette,
     HullKind::Bomber,
     HullKind::ResourceController,
     HullKind::StrikeCarrier,
+    HullKind::FleetCarrier,
 ];
+
+/// Hulls that host spawns for others (the mothership always does).
+pub fn is_spawn_carrier(kind: HullKind) -> bool {
+    matches!(kind, HullKind::StrikeCarrier | HullKind::FleetCarrier)
+}
 
 /// Where a hull may spawn (DESIGN §2 cold start / §6 spawn flow).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,7 +230,9 @@ pub fn class(kind: HullKind) -> HullClass {
     match kind {
         HullKind::Fighter | HullKind::Harvester => HullClass::Economy,
         HullKind::Corvette | HullKind::Bomber => HullClass::Combat,
-        HullKind::ResourceController | HullKind::StrikeCarrier => HullClass::CarrierType,
+        HullKind::ResourceController | HullKind::StrikeCarrier | HullKind::FleetCarrier => {
+            HullClass::CarrierType
+        }
     }
 }
 
@@ -223,5 +250,6 @@ pub fn display_name(kind: HullKind) -> &'static str {
         HullKind::Bomber => "Bomber",
         HullKind::ResourceController => "Res. Controller",
         HullKind::StrikeCarrier => "Strike Carrier",
+        HullKind::FleetCarrier => "Fleet Carrier",
     }
 }
