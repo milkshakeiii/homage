@@ -115,6 +115,7 @@ pub enum HullKind {
     ResourceController,
     StrikeCarrier,
     FleetCarrier,
+    Outfitter,
 }
 
 /// Where a Gunship hull's turret points (world-space radians). Written from
@@ -291,6 +292,25 @@ pub struct UnlockOrder {
     pub fitting: FittingId,
 }
 
+/// Client → server: stow my ship at the friendly facility I'm hovering at
+/// and open the refit screen (DESIGN §6 docking). The server validates
+/// range and friendliness.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DockRequest;
+
+/// Server → client: you are docked at this facility. The loadout screen
+/// opens scoped to its stock; SpawnConfirm undocks in place.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DockedNotice {
+    pub facility: Entity,
+}
+
+impl MapEntities for DockedNotice {
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
+        self.facility = entity_mapper.get_mapped(self.facility);
+    }
+}
+
 /// Server → client: a mothership fell; the match is over. The world resets
 /// shortly after.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -411,6 +431,11 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<MatchResult>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<DockRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<DockedNotice>()
+            .add_direction(NetworkDirection::ServerToClient)
+            .add_map_entities();
         app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);
 

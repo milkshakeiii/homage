@@ -69,7 +69,9 @@ tap). Death opens the spawn system: click a facility on the map (`L` skips to
 loadout), pick a hull and fittings on the loadout screen (click locked tiles
 to unlock with points, again to equip), `M`/`Esc` back to the map, and hit
 SPAWN to deploy — there is no auto-respawn. While flying: corner minimap,
-hold `M` for the full battlefield map, hold `Tab` for the scoreboard.
+hold `M` for the full battlefield map, hold `Tab` for the scoreboard, and
+hold `E` near a friendly facility to dock — refit in place (outfitter
+exclusives are only reachable this way) and undock where you entered.
 
 Dev cheats (manual testing; position cheats target the mouse cursor):
 `F1` +50 ore · `F2` spawn asteroid · `F3` spawn ore fragments · `F4` spawn an

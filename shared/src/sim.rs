@@ -73,6 +73,14 @@ pub const MOTHERSHIP_HEALTH: u16 = 1000;
 /// Flat damage reduction (DESIGN §2): small arms (damage 1) do nothing to a
 /// mothership — capital-killer torpedoes are required, not just efficient.
 pub const MOTHERSHIP_DAMAGE_REDUCTION: u16 = 2;
+/// How close a ship must be to dock at a facility for refits.
+pub fn dock_radius(facility_hull: Option<HullKind>) -> f32 {
+    match facility_hull {
+        None => MOTHERSHIP_RADIUS + 140.0, // the mothership
+        Some(kind) => crate::hulls::stats(kind).hit_radius * 2.0 + 80.0,
+    }
+}
+
 /// Intermission between a mothership kill and the world reset.
 pub const MATCH_RESET_TICKS: i32 = 640; // 10s
 /// Ship-to-dropoff distance that counts as depositing (lenient: guidepost 5).

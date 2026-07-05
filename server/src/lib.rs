@@ -96,6 +96,22 @@ impl PointsStore {
     }
 }
 
+/// Ships stowed at a facility for refits (DESIGN §6 docking). The ship
+/// entity is despawned; undocking (SpawnConfirm while docked) restores it
+/// in place with hull, health, and cargo intact — no cost, no delay.
+#[derive(Resource, Default)]
+pub struct DockedStates(pub std::collections::HashMap<PeerId, DockedShip>);
+
+#[derive(Clone, Copy, Debug)]
+pub struct DockedShip {
+    pub hull: HullKind,
+    pub health: u16,
+    pub cargo: u16,
+    pub facility: Entity,
+    pub link: Entity,
+    pub team: Team,
+}
+
 /// Intermission countdown after a mothership falls; the world resets when
 /// it hits zero.
 #[derive(Resource, Default)]
@@ -342,6 +358,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<Unlocks>();
     app.init_resource::<KdStore>();
     app.init_resource::<MatchState>();
+    app.init_resource::<DockedStates>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     // Message drains MUST run in Update: lightyear clears MessageReceiver
@@ -354,6 +371,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
         (
             receive_spawn_orders,
             receive_spawn_confirms,
+            receive_dock_requests,
             receive_unlock_orders,
             receive_self_destructs,
             receive_cheats,
@@ -574,6 +592,7 @@ fn run_match_reset(
     mut points: ResMut<PointsStore>,
     mut unlocks: ResMut<Unlocks>,
     mut kd: ResMut<KdStore>,
+    mut docked: ResMut<DockedStates>,
     config: Res<AsteroidFieldConfig>,
 ) {
     let Some((winner, ticks_remaining)) = match_state.ending else {
@@ -599,6 +618,7 @@ fn run_match_reset(
     points.0.clear();
     unlocks.0.clear();
     kd.0.clear();
+    docked.0.clear();
     for team in [Team::Blue, Team::Red] {
         commands.spawn((
             sim::mothership_bundle(team),
@@ -826,16 +846,100 @@ fn validate_loadout(
 
 /// Mark a dead player's respawn as confirmed (their map click). Spawning
 /// happens in respawn_ships once the delay has also elapsed.
+#[allow(clippy::too_many_arguments)]
 fn receive_spawn_confirms(
+    mut commands: Commands,
     mut receivers: Query<(&RemoteId, &mut MessageReceiver<SpawnConfirm>), With<ClientOf>>,
     mut tasks: Query<&mut RespawnTask>,
+    mut docked: ResMut<DockedStates>,
+    choices: Res<SpawnChoices>,
+    unlocks: Res<Unlocks>,
+    banks: Res<Banks>,
+    motherships: Query<(Entity, &Team, &Position), With<Mothership>>,
+    facilities: Query<(Entity, &Team, &Position, &HullKind), With<PlayerId>>,
 ) {
     for (client_id, mut receiver) in &mut receivers {
         for _ in receiver.receive() {
+            // Docked: this is an undock. Restore the stowed ship in place
+            // with a loadout revalidated against the facility's stock.
+            if let Some(stowed) = docked.0.remove(&client_id.0) {
+                let facility_kind =
+                    facility_stock_kind(stowed.facility, &motherships, &facilities);
+                let (center, ring, stock) = match facility_kind {
+                    Some(kind) => {
+                        let pos = motherships
+                            .get(stowed.facility)
+                            .map(|(_, _, p)| p.0)
+                            .or_else(|_| facilities.get(stowed.facility).map(|(_, _, p, _)| p.0))
+                            .unwrap_or(sim::team_anchor(stowed.team));
+                        let ring = match kind {
+                            fittings::SpawnFacility::Mothership => sim::SPAWN_RING_RADIUS,
+                            _ => facilities
+                                .get(stowed.facility)
+                                .map(|(.., k)| hulls::stats(*k).width / 2.0 + 90.0)
+                                .unwrap_or(200.0),
+                        };
+                        (pos, ring, kind)
+                    }
+                    // Facility died while we were docked: bail out at home.
+                    None => (
+                        sim::team_anchor(stowed.team),
+                        sim::SPAWN_RING_RADIUS,
+                        fittings::SpawnFacility::Mothership,
+                    ),
+                };
+                let requested = choices
+                    .0
+                    .get(&client_id.0)
+                    .map(|order| order.loadout)
+                    .unwrap_or_default();
+                let loadout = validate_loadout(requested, stock, client_id.0, &unlocks);
+                let pose = sim::spawn_pose_at(client_id.0, stowed.team, center, ring);
+                let bank = banks.0.get(&client_id.0).copied().unwrap_or(0);
+                spawn_ship(
+                    &mut commands,
+                    client_id.0,
+                    stowed.team,
+                    stowed.hull,
+                    loadout,
+                    pose,
+                    bank,
+                    stowed.link,
+                );
+                commands.queue(RestoreShipState {
+                    player: client_id.0,
+                    health: stowed.health,
+                    cargo: stowed.cargo,
+                });
+                info!("{:?} undocked as {:?}", client_id.0, stowed.hull);
+                continue;
+            }
             for mut task in &mut tasks {
                 if task.client_id == client_id.0 {
                     task.confirmed = true;
                 }
+            }
+        }
+    }
+}
+
+/// Deferred: clamp the just-undocked ship's health/cargo back to its stowed
+/// values (the spawn bundle starts it fresh).
+struct RestoreShipState {
+    player: PeerId,
+    health: u16,
+    cargo: u16,
+}
+
+impl bevy::ecs::system::Command for RestoreShipState {
+    type Out = ();
+
+    fn apply(self, world: &mut World) {
+        let mut ships = world.query::<(&PlayerId, &mut Health, &mut CargoHold)>();
+        for (id, mut health, mut hold) in ships.iter_mut(world) {
+            if id.0 == self.player {
+                health.current = self.health.min(health.max);
+                hold.current = self.cargo.min(hold.capacity);
             }
         }
     }
@@ -926,6 +1030,114 @@ fn receive_cheats(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Resolve a facility entity to its stocking kind (None = not dockable).
+fn facility_stock_kind(
+    entity: Entity,
+    motherships: &Query<(Entity, &Team, &Position), With<Mothership>>,
+    ships: &Query<(Entity, &Team, &Position, &HullKind), With<PlayerId>>,
+) -> Option<fittings::SpawnFacility> {
+    if motherships.get(entity).is_ok() {
+        return Some(fittings::SpawnFacility::Mothership);
+    }
+    match ships.get(entity).map(|(_, _, _, kind)| *kind) {
+        Ok(HullKind::StrikeCarrier) => Some(fittings::SpawnFacility::StrikeCarrier),
+        Ok(HullKind::FleetCarrier) => Some(fittings::SpawnFacility::FleetCarrier),
+        Ok(HullKind::Outfitter) => Some(fittings::SpawnFacility::Outfitter),
+        _ => None,
+    }
+}
+
+/// Stow a ship at a nearby friendly facility: despawn it, remember its
+/// state, deposit its hold if the facility is a dropoff, and tell the
+/// client it's docked.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn receive_dock_requests(
+    mut commands: Commands,
+    mut receivers: Query<
+        (
+            &RemoteId,
+            &mut MessageReceiver<DockRequest>,
+            &mut MessageSender<DockedNotice>,
+        ),
+        With<ClientOf>,
+    >,
+    ships: Query<
+        (
+            Entity,
+            &PlayerId,
+            &Team,
+            &Position,
+            &HullKind,
+            &Health,
+            Option<&CargoHold>,
+            &ControlledBy,
+        ),
+        Without<Mothership>,
+    >,
+    motherships: Query<(Entity, &Team, &Position), With<Mothership>>,
+    mut docked: ResMut<DockedStates>,
+    mut banks: ResMut<Banks>,
+    mut points: ResMut<PointsStore>,
+) {
+    for (client_id, mut receiver, mut sender) in &mut receivers {
+        for _ in receiver.receive() {
+            let Some((entity, _, team, position, hull, health, cargo, controlled_by)) = ships
+                .iter()
+                .find(|(_, id, ..)| id.0 == client_id.0)
+            else {
+                continue;
+            };
+            // Nearest friendly dockable facility in range.
+            let mothership_target = motherships
+                .iter()
+                .find(|(_, t, pos)| {
+                    **t == *team && pos.0.distance(position.0) < sim::dock_radius(None)
+                })
+                .map(|(e, ..)| (e, true));
+            let Some((facility, facility_is_dropoff)) = mothership_target.or_else(|| {
+                ships
+                    .iter()
+                    .find(|(other, _, t, pos, kind, ..)| {
+                        *other != entity
+                            && **t == *team
+                            && hulls::is_dockable(**kind)
+                            && pos.0.distance(position.0) < sim::dock_radius(Some(**kind))
+                    })
+                    .map(|(e, _, _, _, kind, ..)| {
+                        (e, matches!(kind, HullKind::FleetCarrier))
+                    })
+            }) else {
+                continue;
+            };
+            // Docking at a dropoff deposits the hold while you shop.
+            let mut cargo_left = cargo.map_or(0, |hold| hold.current);
+            if facility_is_dropoff && cargo_left > 0 {
+                let total = banks.0.entry(client_id.0).or_insert(0);
+                *total += cargo_left as u32;
+                points.award(
+                    client_id.0,
+                    cargo_left as u32 * sim::POINTS_PER_ORE_DEPOSITED,
+                );
+                cargo_left = 0;
+            }
+            docked.0.insert(
+                client_id.0,
+                DockedShip {
+                    hull: *hull,
+                    health: health.current,
+                    cargo: cargo_left,
+                    facility,
+                    link: controlled_by.owner,
+                    team: *team,
+                },
+            );
+            info!("{:?} docked at {facility:?}", client_id.0);
+            commands.entity(entity).try_despawn();
+            sender.send::<OrdersChannel>(DockedNotice { facility });
         }
     }
 }
@@ -1175,8 +1387,15 @@ fn respawn_ships(
                 .find(|(_, t, _, k)| **t == team && hulls::is_spawn_carrier(**k))
                 .map(|(_, _, pos, k)| (pos.0, *k));
 
+            let any_fleet = carriers
+                .iter()
+                .find(|(_, t, _, k)| **t == team && **k == HullKind::FleetCarrier)
+                .map(|(_, _, pos, k)| (pos.0, *k));
             let carrier_spawn = match hulls::class(desired) {
                 hulls::HullClass::CarrierType => None,
+                hulls::HullClass::SubCarrier => requested_carrier
+                    .filter(|(_, k)| *k == HullKind::FleetCarrier)
+                    .or(any_fleet),
                 hulls::HullClass::Combat => requested_carrier.or(any_carrier),
                 hulls::HullClass::Economy => {
                     // An explicit mothership request (or no request) means
@@ -1189,7 +1408,9 @@ fn respawn_ships(
                 }
             };
             let allowed = match hulls::class(desired) {
-                hulls::HullClass::Combat => carrier_spawn.is_some(),
+                hulls::HullClass::Combat | hulls::HullClass::SubCarrier => {
+                    carrier_spawn.is_some()
+                }
                 _ => true,
             };
 

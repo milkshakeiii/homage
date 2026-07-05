@@ -186,6 +186,25 @@ const FLEET_CARRIER: HullStats = HullStats {
     weapon: None,
 };
 
+/// The sub-carrier (DESIGN §6): built only AT a fleet carrier — the
+/// ships-build-ships tree one level deeper. Not a spawn host; it exists to
+/// be docked at: the sole source of outfitter-exclusive modules, pushed
+/// forward as a mobile pit stop.
+const OUTFITTER: HullStats = HullStats {
+    archetype: Archetype::Captain,
+    cost: 30,
+    health: 8,
+    cargo_capacity: 0,
+    accel: 170.0,
+    brake: 230.0,
+    turn_speed: 0.0,
+    max_speed: 160.0,
+    length: 70.0,
+    width: 70.0,
+    hit_radius: 33.0,
+    weapon: None,
+};
+
 pub fn stats(kind: HullKind) -> &'static HullStats {
     match kind {
         HullKind::Fighter => &FIGHTER,
@@ -195,11 +214,12 @@ pub fn stats(kind: HullKind) -> &'static HullStats {
         HullKind::ResourceController => &RESOURCE_CONTROLLER,
         HullKind::StrikeCarrier => &STRIKE_CARRIER,
         HullKind::FleetCarrier => &FLEET_CARRIER,
+        HullKind::Outfitter => &OUTFITTER,
     }
 }
 
 /// Hulls offered in the respawn menu, in display order.
-pub const PURCHASABLE: [HullKind; 7] = [
+pub const PURCHASABLE: [HullKind; 8] = [
     HullKind::Fighter,
     HullKind::Harvester,
     HullKind::Corvette,
@@ -207,6 +227,7 @@ pub const PURCHASABLE: [HullKind; 7] = [
     HullKind::ResourceController,
     HullKind::StrikeCarrier,
     HullKind::FleetCarrier,
+    HullKind::Outfitter,
 ];
 
 /// Hulls that host spawns for others (the mothership always does).
@@ -220,10 +241,12 @@ pub enum HullClass {
     /// Fighter, harvester: spawn at the mothership or any friendly carrier —
     /// a team knocked back to nothing can always rebuild.
     Economy,
-    /// Corvette and up: require a live friendly strike carrier.
+    /// Corvette and up: require a live friendly carrier.
     Combat,
     /// Carrier-type hulls: built at the mothership only.
     CarrierType,
+    /// Sub-carriers (outfitter): built only at a fleet carrier.
+    SubCarrier,
 }
 
 pub fn class(kind: HullKind) -> HullClass {
@@ -233,6 +256,7 @@ pub fn class(kind: HullKind) -> HullClass {
         HullKind::ResourceController | HullKind::StrikeCarrier | HullKind::FleetCarrier => {
             HullClass::CarrierType
         }
+        HullKind::Outfitter => HullClass::SubCarrier,
     }
 }
 
@@ -251,5 +275,14 @@ pub fn display_name(kind: HullKind) -> &'static str {
         HullKind::ResourceController => "Res. Controller",
         HullKind::StrikeCarrier => "Strike Carrier",
         HullKind::FleetCarrier => "Fleet Carrier",
+        HullKind::Outfitter => "Outfitter",
     }
+}
+
+/// Hulls a ship can dock at for refits (the mothership always allows it).
+pub fn is_dockable(kind: HullKind) -> bool {
+    matches!(
+        kind,
+        HullKind::StrikeCarrier | HullKind::FleetCarrier | HullKind::Outfitter
+    )
 }

@@ -70,6 +70,26 @@ impl WealthCache {
     }
 }
 
+/// The facility we're currently docked at, if any (from DockedNotice;
+/// cleared when our ship exists again).
+#[derive(Resource, Default)]
+pub struct DockedAt(pub Option<Entity>);
+
+fn receive_docked_notices(
+    mut receivers: Query<&mut MessageReceiver<DockedNotice>, With<Client>>,
+    alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    mut docked: ResMut<DockedAt>,
+) {
+    for mut receiver in &mut receivers {
+        for notice in receiver.receive() {
+            docked.0 = Some(notice.facility);
+        }
+    }
+    if !alive.is_empty() {
+        docked.0 = None;
+    }
+}
+
 /// The last match result heard from the server (cleared implicitly when the
 /// next match's gameplay resumes; the banner reads it).
 #[derive(Resource, Default)]
@@ -192,9 +212,15 @@ pub fn build_client_app(config: ClientConfig) -> App {
     app.add_systems(Startup, connect);
     app.init_resource::<WealthCache>();
     app.init_resource::<LastMatchResult>();
+    app.init_resource::<DockedAt>();
     app.add_systems(
         Update,
-        (auto_confirm_spawn, receive_wealth_updates, receive_match_results),
+        (
+            auto_confirm_spawn,
+            receive_wealth_updates,
+            receive_match_results,
+            receive_docked_notices,
+        ),
     );
     app.add_systems(
         FixedPreUpdate,
@@ -245,12 +271,14 @@ pub fn build_client_app(config: ClientConfig) -> App {
         app.add_plugins((juice::JuicePlugin, spawn_screen::SpawnScreenPlugin));
         app.add_systems(Startup, (setup_scene, setup_hud));
         app.init_resource::<SelfDestructHold>();
+        app.init_resource::<DockHint>();
         app.add_systems(
             Update,
             (
                 accumulate_taps,
                 track_mouse,
                 self_destruct,
+                dock_hold,
                 send_cheats,
                 update_hud,
             ),
@@ -412,6 +440,7 @@ fn update_hud(
     recent: Res<juice::RecentEarnings>,
     recent_points: Res<juice::RecentPoints>,
     destruct: Res<SelfDestructHold>,
+    dock_hint: Res<DockHint>,
     ship: Query<
         (Option<&Bank>, Option<&Points>, Option<&CargoHold>),
         (With<Predicted>, With<InputMarker<Inputs>>),
@@ -448,8 +477,9 @@ fn update_hud(
     } else {
         String::new()
     };
+    let dock = dock_hint.0.map(|h| format!("   {h}")).unwrap_or_default();
     text.0 = format!(
-        "Banked: {bank}{earned}   Pts: {points}{points_earned}   Hold: {held}/{capacity}{warning}"
+        "Banked: {bank}{earned}   Pts: {points}{points_earned}   Hold: {held}/{capacity}{dock}{warning}"
     );
 }
 
@@ -459,10 +489,11 @@ fn auto_confirm_spawn(
     time: Res<Time>,
     mut last_sent: Local<f32>,
     auto: Res<AutoSpawn>,
+    docked: Res<DockedAt>,
     alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
     mut sender: Query<&mut MessageSender<SpawnConfirm>, With<Client>>,
 ) {
-    if !auto.0 || !alive.is_empty() {
+    if !auto.0 || !alive.is_empty() || docked.0.is_some() {
         return;
     }
     if time.elapsed_secs() - *last_sent < 1.0 {
@@ -536,6 +567,53 @@ fn self_destruct(
                 info!("SelfDestruct sent");
             }
             Err(e) => warn!("SelfDestruct not sent, no sender: {e}"),
+        }
+    }
+}
+
+/// Hold E near a friendly facility to dock for refits (DESIGN §6). The
+/// server validates range; this also surfaces a HUD hint via DockHint.
+#[derive(Resource, Default)]
+struct DockHint(Option<&'static str>);
+
+#[allow(clippy::type_complexity)]
+fn dock_hold(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut hold: Local<f32>,
+    mut hint: ResMut<DockHint>,
+    ship: Query<(&Position, &Team), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    motherships: Query<(&Position, &Team), With<Mothership>>,
+    facilities: Query<(&Position, &Team, &HullKind), With<PlayerId>>,
+    mut sender: Query<&mut MessageSender<DockRequest>, With<Client>>,
+) {
+    hint.0 = None;
+    let Ok((position, team)) = ship.single() else {
+        *hold = 0.0;
+        return;
+    };
+    let near_mothership = motherships
+        .iter()
+        .any(|(pos, t)| t == team && pos.0.distance(position.0) < sim::dock_radius(None));
+    let near_facility = facilities.iter().any(|(pos, t, kind)| {
+        t == team
+            && hulls::is_dockable(*kind)
+            && pos.0.distance(position.0) < sim::dock_radius(Some(*kind))
+    });
+    if !near_mothership && !near_facility {
+        *hold = 0.0;
+        return;
+    }
+    hint.0 = Some("[hold E] dock");
+    if !keys.pressed(KeyCode::KeyE) {
+        *hold = 0.0;
+        return;
+    }
+    let before = *hold;
+    *hold += time.delta_secs();
+    if before < 0.5 && *hold >= 0.5 {
+        if let Ok(mut sender) = sender.single_mut() {
+            sender.send::<OrdersChannel>(DockRequest);
         }
     }
 }

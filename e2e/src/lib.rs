@@ -305,6 +305,27 @@ impl TestNet {
         entries
     }
 
+    /// Request a dock, as holding E would.
+    pub fn client_send_dock(&mut self, client_idx: usize) {
+        let world = self.clients[client_idx].world_mut();
+        let mut query =
+            world.query_filtered::<&mut MessageSender<DockRequest>, With<Client>>();
+        let mut sent = 0;
+        for mut sender in query.iter_mut(world) {
+            sender.send::<OrdersChannel>(DockRequest);
+            sent += 1;
+        }
+        assert!(sent > 0, "no MessageSender<DockRequest> on the client entity");
+    }
+
+    /// Which facility the client believes it's docked at.
+    pub fn client_docked_at(&mut self, client_idx: usize) -> Option<Entity> {
+        self.clients[client_idx]
+            .world()
+            .resource::<homage_client::DockedAt>()
+            .0
+    }
+
     /// The client's last-known wealth cache (fed by ship components while
     /// alive and WealthUpdate messages while dead).
     pub fn client_wealth(&mut self, client_idx: usize) -> (u32, u32, Vec<FittingId>) {

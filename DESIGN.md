@@ -347,9 +347,13 @@ holding map features.
   required, §2); the bomber and its 25-damage dumb-fire torpedo are the
   first capital killer; a mothership kill announces the winner to everyone
   and resets the world after a 10 s intermission (ledgers cleared, field
-  regenerated, everyone redeploys through the spawn screen). Remaining
-  breadth: missile boat, megalaser frigate, fleet carrier, outfitter, map
-  balance pass.
+  regenerated, everyone redeploys through the spawn screen). Fleet carrier,
+  outfitter (built only AT a fleet carrier — ships-build-ships one level
+  deeper), and the docking/refit model are done: hold E at a friendly
+  facility to dock (dropoffs auto-deposit), refit against its stock, undock
+  in place instantly and free. Blink is outfitter-exclusive as the catalog
+  intended. Remaining breadth: missile boat, megalaser frigate, map balance
+  pass, RC docking.
 
 Every milestone re-checks the §4.2 guideposts; feel regressions are release
 blockers, not polish debt.

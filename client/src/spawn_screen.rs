@@ -36,6 +36,7 @@ pub struct LoadoutState {
     pub facility: Option<Entity>,
     pub loadout: Loadout,
     pub confirmed: bool,
+    pub docked: bool,
     /// Detail-panel text (last clicked tile).
     pub detail: String,
 }
@@ -47,6 +48,7 @@ impl Default for LoadoutState {
             facility: None,
             loadout: Loadout::default(),
             confirmed: false,
+            docked: false,
             detail: String::new(),
         }
     }
@@ -752,6 +754,7 @@ fn cache_wealth(
 #[allow(clippy::type_complexity)]
 fn dead_ui_lifecycle(
     alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    docked: Res<crate::DockedAt>,
     keys: Res<ButtonInput<KeyCode>>,
     mut ui: ResMut<DeadUi>,
     mut state: ResMut<LoadoutState>,
@@ -775,8 +778,17 @@ fn dead_ui_lifecycle(
         *ui = DeadUi::Hidden;
         *died_at = None;
         state.confirmed = false;
-    } else if *ui == DeadUi::Hidden {
+        state.docked = false;
+    } else if docked.0.is_some() {
+        // Docked, not dead: straight to the refit screen at this facility.
+        *ui = DeadUi::Loadout;
+        state.docked = true;
+        state.facility = docked.0;
+        state.confirmed = false;
+        *died_at = None;
+    } else if *ui == DeadUi::Hidden || state.docked {
         *ui = DeadUi::Map;
+        state.docked = false;
         state.facility = None;
         died_at.get_or_insert(time.elapsed_secs());
     }
@@ -816,6 +828,11 @@ fn hull_tile_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        if state.docked {
+            state.detail =
+                "Docked: refit only. Undock and rebuild to change hulls.".to_string();
+            continue;
+        }
         let facility = facility_kind(state.facility, &facility_lookup);
         if let Err(reason) = hull_gate(tile.0, facility, wealth.bank) {
             state.detail = format!("{}: {reason}", hulls::display_name(tile.0));
@@ -849,6 +866,7 @@ enum FacilityKind {
     Mothership,
     StrikeCarrier,
     FleetCarrier,
+    Outfitter,
 }
 
 fn facility_kind(
@@ -859,6 +877,7 @@ fn facility_kind(
         Ok((Some(_), _)) => Some(FacilityKind::Mothership),
         Ok((_, Some(HullKind::StrikeCarrier))) => Some(FacilityKind::StrikeCarrier),
         Ok((_, Some(HullKind::FleetCarrier))) => Some(FacilityKind::FleetCarrier),
+        Ok((_, Some(HullKind::Outfitter))) => Some(FacilityKind::Outfitter),
         _ => None,
     }
 }
@@ -880,11 +899,15 @@ fn hull_gate(
             FacilityKind::StrikeCarrier | FacilityKind::FleetCarrier
         ),
         hulls::HullClass::CarrierType => facility == FacilityKind::Mothership,
+        hulls::HullClass::SubCarrier => facility == FacilityKind::FleetCarrier,
     };
     if !class_ok {
         return Err(match hulls::class(kind) {
             hulls::HullClass::Combat => {
-                "Combat hulls deploy from a strike carrier - pick one on the map [M].".into()
+                "Combat hulls deploy from a carrier - pick one on the map [M].".into()
+            }
+            hulls::HullClass::SubCarrier => {
+                "Sub-carriers are built at a FLEET carrier - pick one on the map [M].".into()
             }
             _ => "Carrier-type hulls are built at the mothership - pick it on the map [M].".into(),
         });
@@ -899,8 +922,9 @@ fn hull_gate(
 fn hull_requirement_note(kind: HullKind) -> &'static str {
     match hulls::class(kind) {
         hulls::HullClass::Economy => "Spawns at the mothership or any friendly carrier.",
-        hulls::HullClass::Combat => "Requires a live friendly strike carrier.",
+        hulls::HullClass::Combat => "Requires a live friendly carrier.",
         hulls::HullClass::CarrierType => "Built at the mothership only.",
+        hulls::HullClass::SubCarrier => "Built at a fleet carrier only.",
     }
 }
 
@@ -923,6 +947,7 @@ fn module_tile_clicks(
             fittings::Stocking::Everywhere => "stocked everywhere",
             fittings::Stocking::AnyCarrier => "stocked at carriers",
             fittings::Stocking::StrikeCarrierOnly => "stocked at strike carriers",
+            fittings::Stocking::OutfitterOnly => "stocked at outfitters (dock to refit)",
         };
         // Not yet unlocked: this click is a purchase attempt.
         if !wealth.has_unlock(tile.0) {
@@ -956,6 +981,10 @@ fn module_tile_clicks(
                 FacilityKind::FleetCarrier => fittings::stocked_at(
                     def.stocking,
                     fittings::SpawnFacility::FleetCarrier,
+                ),
+                FacilityKind::Outfitter => fittings::stocked_at(
+                    def.stocking,
+                    fittings::SpawnFacility::Outfitter,
                 ),
             })
             .unwrap_or(false);
@@ -1019,7 +1048,11 @@ fn spawn_button_clicks(
     }
 }
 
-fn screen_keys(keys: Res<ButtonInput<KeyCode>>, mut ui: ResMut<DeadUi>) {
+fn screen_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut ui: ResMut<DeadUi>,
+    docked_state: Res<LoadoutState>,
+) {
     match *ui {
         DeadUi::Map => {
             if keys.just_pressed(KeyCode::KeyL) {
@@ -1027,7 +1060,9 @@ fn screen_keys(keys: Res<ButtonInput<KeyCode>>, mut ui: ResMut<DeadUi>) {
             }
         }
         DeadUi::Loadout => {
-            if keys.just_pressed(KeyCode::KeyM) || keys.just_pressed(KeyCode::Escape) {
+            if (keys.just_pressed(KeyCode::KeyM) || keys.just_pressed(KeyCode::Escape))
+                && !docked_state.docked
+            {
                 *ui = DeadUi::Map;
             }
         }
@@ -1131,7 +1166,9 @@ fn update_screen_texts(
         t.0 = format!("Spawning at: {facility}   [M] map");
     }
     if let Ok(mut t) = texts.p6().single_mut() {
-        t.0 = if state.confirmed {
+        t.0 = if state.docked {
+            "UNDOCK".into()
+        } else if state.confirmed {
             if ready { "DEPLOYING...".into() } else { format!("DEPLOY IN {ready_in:.1}") }
         } else {
             "SPAWN".into()
@@ -1142,6 +1179,7 @@ fn update_screen_texts(
         FacilityKind::Mothership => fittings::SpawnFacility::Mothership,
         FacilityKind::StrikeCarrier => fittings::SpawnFacility::StrikeCarrier,
         FacilityKind::FleetCarrier => fittings::SpawnFacility::FleetCarrier,
+        FacilityKind::Outfitter => fittings::SpawnFacility::Outfitter,
     });
     for (tile, mut bg) in &mut module_tiles {
         let def = fittings::def(tile.0);

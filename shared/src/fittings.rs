@@ -2,9 +2,8 @@
 //! unlocks; equipping happens on the spawn screen, limited to what the spawn
 //! facility stocks. Every entry here is implemented — no placeholder rows.
 //!
-//! Stocking deviations from the DESIGN table (until the outfitter hull and
-//! alive-docking exist): outfitter-stocked items live at the strike carrier,
-//! resource-controller-stocked items at any carrier.
+//! Remaining stocking deviation from the DESIGN table: resource-controller
+//! items live at any carrier (RC docking is a future slice).
 
 use crate::protocol::{FittingId, HullKind};
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ pub enum Stocking {
     Everywhere,
     AnyCarrier,
     StrikeCarrierOnly,
+    OutfitterOnly,
 }
 
 /// The facility a spawn happens from, for stocking checks.
@@ -30,6 +30,7 @@ pub enum SpawnFacility {
     Mothership,
     StrikeCarrier,
     FleetCarrier,
+    Outfitter,
 }
 
 pub fn stocked_at(stocking: Stocking, facility: SpawnFacility) -> bool {
@@ -37,11 +38,14 @@ pub fn stocked_at(stocking: Stocking, facility: SpawnFacility) -> bool {
         Stocking::Everywhere => true,
         Stocking::AnyCarrier => matches!(
             facility,
-            SpawnFacility::StrikeCarrier | SpawnFacility::FleetCarrier
+            SpawnFacility::StrikeCarrier | SpawnFacility::FleetCarrier | SpawnFacility::Outfitter
         ),
         // The strike/fleet asymmetry (DESIGN §6): the best weapons and
         // frames come off the strike carrier only.
         Stocking::StrikeCarrierOnly => facility == SpawnFacility::StrikeCarrier,
+        // Outfitter exclusives are why the sub-carrier exists — and since it
+        // hosts no spawns, they are reachable only by docking.
+        Stocking::OutfitterOnly => facility == SpawnFacility::Outfitter,
     }
 }
 
@@ -64,8 +68,8 @@ pub const CATALOG: [FittingDef; 9] = [
         blurb: "Slow cycle, extreme velocity. Leading shots become sniping." },
     FittingDef { id: FittingId::Afterburner, name: "Afterburner", slot: Slot::Utility, cost: 10, stocking: Stocking::Everywhere,
         blurb: "Hold SHIFT: +50% thrust, +25% top speed. Heat limits arrive later." },
-    FittingDef { id: FittingId::BlinkThruster, name: "Blink Thruster", slot: Slot::Utility, cost: 25, stocking: Stocking::StrikeCarrierOnly,
-        blurb: "SHIFT: an instant impulse along your nose, 3s cooldown. Be somewhere else." },
+    FittingDef { id: FittingId::BlinkThruster, name: "Blink Thruster", slot: Slot::Utility, cost: 25, stocking: Stocking::OutfitterOnly,
+        blurb: "SHIFT: an instant impulse along your nose, 3s cooldown. Only an outfitter fits these." },
     FittingDef { id: FittingId::GyroTuning, name: "Gyro Tuning", slot: Slot::HullMod, cost: 8, stocking: Stocking::Everywhere,
         blurb: "+25% turn rate. The cheapest way to feel better." },
     FittingDef { id: FittingId::ArmorPlate, name: "Armor Plate", slot: Slot::HullMod, cost: 8, stocking: Stocking::Everywhere,
