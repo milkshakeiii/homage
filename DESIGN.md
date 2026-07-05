@@ -342,8 +342,14 @@ holding map features.
   and points, backed by replicated per-player roster entities that survive
   death (kill/death ledger next to the points ledger; self-destructs count
   as deaths).
-- **M4 — win condition & breadth:** mothership HP/kill flow, match reset,
-  fleet carrier + outfitter + remaining roster, map balance pass.
+- **M4 — win condition & breadth (win condition done):** motherships take
+  damage above flat DR (small arms literally bounce — capital weapons are
+  required, §2); the bomber and its 25-damage dumb-fire torpedo are the
+  first capital killer; a mothership kill announces the winner to everyone
+  and resets the world after a 10 s intermission (ledgers cleared, field
+  regenerated, everyone redeploys through the spawn screen). Remaining
+  breadth: missile boat, megalaser frigate, fleet carrier, outfitter, map
+  balance pass.
 
 Every milestone re-checks the §4.2 guideposts; feel regressions are release
 blockers, not polish debt.
