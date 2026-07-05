@@ -70,6 +70,25 @@ impl WealthCache {
     }
 }
 
+/// The last match result heard from the server (cleared implicitly when the
+/// next match's gameplay resumes; the banner reads it).
+#[derive(Resource, Default)]
+pub struct LastMatchResult(pub Option<(Team, f32)>);
+
+/// Consume match results. Runs in Update in both modes: receivers are
+/// cleared every frame.
+fn receive_match_results(
+    time: Res<Time>,
+    mut receivers: Query<&mut MessageReceiver<MatchResult>, With<Client>>,
+    mut last: ResMut<LastMatchResult>,
+) {
+    for mut receiver in &mut receivers {
+        for result in receiver.receive() {
+            last.0 = Some((result.winner, time.elapsed_secs()));
+        }
+    }
+}
+
 /// Consume authoritative wealth snapshots (sent after unlock orders). Runs
 /// in Update in both modes: receivers are cleared every frame.
 fn receive_wealth_updates(
@@ -172,7 +191,11 @@ pub fn build_client_app(config: ClientConfig) -> App {
 
     app.add_systems(Startup, connect);
     app.init_resource::<WealthCache>();
-    app.add_systems(Update, (auto_confirm_spawn, receive_wealth_updates));
+    app.init_resource::<LastMatchResult>();
+    app.add_systems(
+        Update,
+        (auto_confirm_spawn, receive_wealth_updates, receive_match_results),
+    );
     app.add_systems(
         FixedPreUpdate,
         buffer_input.in_set(InputSystems::WriteClientInputs),
@@ -787,19 +810,18 @@ fn draw_turrets(
 fn draw_bullets(
     mut gizmos: Gizmos,
     bullets: Query<
-        (&Position, &PlayerColor),
-        (
-            With<BulletMarker>,
-            Or<(With<Predicted>, With<Interpolated>, With<PreSpawned>)>,
-        ),
+        (&Position, &PlayerColor, &BulletMarker),
+        Or<(With<Predicted>, With<Interpolated>, With<PreSpawned>)>,
     >,
 ) {
-    for (position, color) in &bullets {
-        gizmos.circle_2d(
-            Isometry2d::from_translation(position.0),
-            sim::BULLET_SIZE,
-            color.0,
-        );
+    for (position, color, marker) in &bullets {
+        // Torpedoes read as ordnance, not tracer fire.
+        let radius = if marker.damage > 1 {
+            sim::BULLET_SIZE * 3.0
+        } else {
+            sim::BULLET_SIZE
+        };
+        gizmos.circle_2d(Isometry2d::from_translation(position.0), radius, color.0);
     }
 }
 
@@ -808,9 +830,9 @@ fn draw_bullets(
 fn draw_motherships(
     mut gizmos: Gizmos,
     time: Res<Time>,
-    motherships: Query<(&Position, &Team), With<Mothership>>,
+    motherships: Query<(&Position, &Team, Option<&Health>), With<Mothership>>,
 ) {
-    for (position, team) in &motherships {
+    for (position, team, health) in &motherships {
         let color = team_color(*team);
         let pos = position.0;
         gizmos.circle_2d(Isometry2d::from_translation(pos), sim::MOTHERSHIP_RADIUS, color);
@@ -819,6 +841,16 @@ fn draw_motherships(
             sim::MOTHERSHIP_RADIUS * 0.55,
             color.with_alpha(0.6),
         );
+        if let Some(health) = health {
+            let fraction = health.current as f32 / health.max.max(1) as f32;
+            let width = sim::MOTHERSHIP_RADIUS * 1.6;
+            let y = sim::MOTHERSHIP_RADIUS + 16.0;
+            gizmos.line_2d(
+                pos + Vec2::new(-width / 2.0, y),
+                pos + Vec2::new(-width / 2.0 + width * fraction, y),
+                Color::srgb(0.2, 1.0, 0.2),
+            );
+        }
         // Slowly rotating docking spokes, so the structure reads as alive.
         let spin = time.elapsed_secs() * 0.2;
         for i in 0..3 {

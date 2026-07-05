@@ -23,6 +23,7 @@ pub enum Archetype {
 pub struct WeaponStats {
     pub cooldown_ticks: u16,
     pub bullet_speed: f32,
+    pub damage: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,6 +63,7 @@ const FIGHTER: HullStats = HullStats {
     weapon: Some(WeaponStats {
         cooldown_ticks: sim::FIRE_COOLDOWN_TICKS,
         bullet_speed: sim::BULLET_SPEED,
+        damage: 1,
     }),
 };
 
@@ -83,6 +85,7 @@ const HARVESTER: HullStats = HullStats {
     weapon: Some(WeaponStats {
         cooldown_ticks: 40,
         bullet_speed: 380.0,
+        damage: 1,
     }),
 };
 
@@ -104,6 +107,29 @@ const CORVETTE: HullStats = HullStats {
     weapon: Some(WeaponStats {
         cooldown_ticks: 9,
         bullet_speed: 560.0,
+        damage: 1,
+    }),
+};
+
+/// The capital-killer (DESIGN §5): slow dumb-fire torpedoes that punch
+/// through mothership damage reduction, on a hull that loses every dogfight.
+/// Helpless against fighters by geometry: the torpedo can't track them.
+const BOMBER: HullStats = HullStats {
+    archetype: Archetype::Pilot,
+    cost: 20,
+    health: 4,
+    cargo_capacity: 2,
+    accel: 300.0,
+    brake: 420.0,
+    turn_speed: 2.6,
+    max_speed: 340.0,
+    length: 40.0,
+    width: 26.0,
+    hit_radius: 16.0,
+    weapon: Some(WeaponStats {
+        cooldown_ticks: 96,
+        bullet_speed: 260.0,
+        damage: 25,
     }),
 };
 
@@ -147,16 +173,18 @@ pub fn stats(kind: HullKind) -> &'static HullStats {
         HullKind::Fighter => &FIGHTER,
         HullKind::Harvester => &HARVESTER,
         HullKind::Corvette => &CORVETTE,
+        HullKind::Bomber => &BOMBER,
         HullKind::ResourceController => &RESOURCE_CONTROLLER,
         HullKind::StrikeCarrier => &STRIKE_CARRIER,
     }
 }
 
 /// Hulls offered in the respawn menu, in display order.
-pub const PURCHASABLE: [HullKind; 5] = [
+pub const PURCHASABLE: [HullKind; 6] = [
     HullKind::Fighter,
     HullKind::Harvester,
     HullKind::Corvette,
+    HullKind::Bomber,
     HullKind::ResourceController,
     HullKind::StrikeCarrier,
 ];
@@ -176,7 +204,7 @@ pub enum HullClass {
 pub fn class(kind: HullKind) -> HullClass {
     match kind {
         HullKind::Fighter | HullKind::Harvester => HullClass::Economy,
-        HullKind::Corvette => HullClass::Combat,
+        HullKind::Corvette | HullKind::Bomber => HullClass::Combat,
         HullKind::ResourceController | HullKind::StrikeCarrier => HullClass::CarrierType,
     }
 }
@@ -192,6 +220,7 @@ pub fn display_name(kind: HullKind) -> &'static str {
         HullKind::Fighter => "Fighter",
         HullKind::Harvester => "Harvester",
         HullKind::Corvette => "Corvette",
+        HullKind::Bomber => "Bomber",
         HullKind::ResourceController => "Res. Controller",
         HullKind::StrikeCarrier => "Strike Carrier",
     }

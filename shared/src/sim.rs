@@ -70,6 +70,11 @@ pub const BOUNDARY_PUSH: f32 = 900.0; // units/s^2 at full depth
 
 pub const MOTHERSHIP_RADIUS: f32 = 120.0;
 pub const MOTHERSHIP_HEALTH: u16 = 1000;
+/// Flat damage reduction (DESIGN §2): small arms (damage 1) do nothing to a
+/// mothership — capital-killer torpedoes are required, not just efficient.
+pub const MOTHERSHIP_DAMAGE_REDUCTION: u16 = 2;
+/// Intermission between a mothership kill and the world reset.
+pub const MATCH_RESET_TICKS: i32 = 640; // 10s
 /// Ship-to-dropoff distance that counts as depositing (lenient: guidepost 5).
 pub const DEPOSIT_RADIUS: f32 = MOTHERSHIP_RADIUS + 130.0;
 /// Deposit radius around a friendly resource controller (the mobile dropoff).
@@ -510,7 +515,10 @@ pub fn shared_player_firing(
                     Position(origin),
                     LinearVelocity(bullet_velocity),
                     RigidBody::Kinematic,
-                    BulletMarker { owner: player_id.0 },
+                    BulletMarker {
+                        owner: player_id.0,
+                        damage: profile.damage,
+                    },
                     PlayerColor(color.0),
                     Expires {
                         origin_tick: current_tick,

@@ -96,6 +96,13 @@ impl PointsStore {
     }
 }
 
+/// Intermission countdown after a mothership falls; the world resets when
+/// it hits zero.
+#[derive(Resource, Default)]
+pub struct MatchState {
+    pub ending: Option<(Team, i32)>,
+}
+
 /// Kill/death tallies per player (scoreboard data; survives death).
 #[derive(Resource, Default)]
 pub struct KdStore(pub std::collections::HashMap<PeerId, (u32, u32)>);
@@ -334,6 +341,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<PointsStore>();
     app.init_resource::<Unlocks>();
     app.init_resource::<KdStore>();
+    app.init_resource::<MatchState>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     // Message drains MUST run in Update: lightyear clears MessageReceiver
@@ -355,12 +363,14 @@ pub fn build_server_app(addr: SocketAddr) -> App {
         FixedUpdate,
         (
             hit_detection,
+            mothership_hit_detection,
             asteroid_hit_detection,
             scoop_fragments,
             deposit_cargo,
             sync_points,
             sync_unlocks,
             sync_roster,
+            run_match_reset,
             respawn_ships,
             log_ships,
         )
@@ -419,6 +429,10 @@ fn spawn_motherships(mut commands: Commands) {
 /// middle, plus a safer thin belt near each mothership for bootstrap
 /// harvesting. Deterministic from the config seed.
 fn spawn_asteroid_field(config: Res<AsteroidFieldConfig>, mut commands: Commands) {
+    generate_asteroid_field(&config, &mut commands);
+}
+
+fn generate_asteroid_field(config: &AsteroidFieldConfig, commands: &mut Commands) {
     if !config.enabled {
         return;
     }
@@ -486,6 +500,123 @@ fn spawn_asteroid_field(config: Res<AsteroidFieldConfig>, mut commands: Commands
     info!("Spawned {} asteroids", placed.len());
 }
 
+/// Bullets pound motherships: swept segment vs the hull circle, minus flat
+/// damage reduction — small arms bounce off (DESIGN §2). Zero health ends
+/// the match.
+fn mothership_hit_detection(
+    mut commands: Commands,
+    mut match_state: ResMut<MatchState>,
+    bullets: Query<(Entity, &Position, &LinearVelocity, &BulletMarker)>,
+    shooters: Query<(&PlayerId, &Team)>,
+    mut motherships: Query<(&Position, &Team, &mut Health), With<Mothership>>,
+) {
+    if match_state.ending.is_some() {
+        return;
+    }
+    for (bullet_entity, position, velocity, marker) in &bullets {
+        let Some(shooter_team) = shooters
+            .iter()
+            .find(|(id, _)| id.0 == marker.owner)
+            .map(|(_, team)| *team)
+        else {
+            continue;
+        };
+        let seg_start = position.0;
+        let seg_end = position.0 + velocity.0 * sim::TICK_DT;
+        for (mothership_pos, team, mut health) in &mut motherships {
+            if *team == shooter_team
+                || !segment_hits_circle(
+                    seg_start,
+                    seg_end,
+                    mothership_pos.0,
+                    sim::MOTHERSHIP_RADIUS + sim::BULLET_SIZE,
+                )
+            {
+                continue;
+            }
+            commands.entity(bullet_entity).try_despawn();
+            let damage = marker.damage.saturating_sub(sim::MOTHERSHIP_DAMAGE_REDUCTION);
+            if damage == 0 {
+                break;
+            }
+            health.current = health.current.saturating_sub(damage);
+            if health.current == 0 {
+                info!("MATCH OVER: {team:?} mothership destroyed; {shooter_team:?} wins");
+                match_state.ending = Some((shooter_team, sim::MATCH_RESET_TICKS));
+            }
+            break;
+        }
+    }
+}
+
+/// Run the intermission: announce the winner once, count down, then reset
+/// the world for a fresh match (ledgers cleared, field regenerated, everyone
+/// back through the spawn screen).
+#[allow(clippy::too_many_arguments)]
+fn run_match_reset(
+    mut commands: Commands,
+    mut match_state: ResMut<MatchState>,
+    mut announced: Local<bool>,
+    mut senders: Query<&mut MessageSender<MatchResult>, With<ClientOf>>,
+    links: Query<(Entity, &RemoteId), With<ClientOf>>,
+    world_entities: Query<
+        Entity,
+        Or<(
+            With<PlayerId>,
+            With<BulletMarker>,
+            With<OreFragment>,
+            With<Asteroid>,
+            With<Mothership>,
+            With<RespawnTask>,
+        )>,
+    >,
+    mut banks: ResMut<Banks>,
+    mut points: ResMut<PointsStore>,
+    mut unlocks: ResMut<Unlocks>,
+    mut kd: ResMut<KdStore>,
+    config: Res<AsteroidFieldConfig>,
+) {
+    let Some((winner, ticks_remaining)) = match_state.ending else {
+        *announced = false;
+        return;
+    };
+    if !*announced {
+        *announced = true;
+        for mut sender in &mut senders {
+            sender.send::<OrdersChannel>(MatchResult { winner });
+        }
+    }
+    if ticks_remaining > 0 {
+        match_state.ending = Some((winner, ticks_remaining - 1));
+        return;
+    }
+    info!("Resetting the world for a new match");
+    match_state.ending = None;
+    for entity in &world_entities {
+        commands.entity(entity).try_despawn();
+    }
+    banks.0.clear();
+    points.0.clear();
+    unlocks.0.clear();
+    kd.0.clear();
+    for team in [Team::Blue, Team::Red] {
+        commands.spawn((
+            sim::mothership_bundle(team),
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+    }
+    generate_asteroid_field(&config, &mut commands);
+    // Everyone re-enters through the spawn screen.
+    for (link, client_id) in &links {
+        commands.spawn(RespawnTask {
+            client_id: client_id.0,
+            link,
+            ticks_remaining: sim::RESPAWN_DELAY_TICKS,
+            confirmed: false,
+        });
+    }
+}
+
 /// Bullets crack asteroids: swept segment vs the rock's circle (no lag
 /// compensation — the rocks don't move). A cracked asteroid ejects ore
 /// fragments in a deterministic fan.
@@ -510,7 +641,7 @@ fn asteroid_hit_detection(
                 continue;
             }
             commands.entity(bullet_entity).try_despawn();
-            health.current = health.current.saturating_sub(1);
+            health.current = health.current.saturating_sub(marker.damage);
             if health.current == 0 {
                 commands.entity(asteroid_entity).try_despawn();
                 let count = sim::asteroid_fragment_count(asteroid.radius);
@@ -947,7 +1078,7 @@ fn hit_detection(
             continue;
         };
         let target_id = target_id.0;
-        health.current = health.current.saturating_sub(1);
+        health.current = health.current.saturating_sub(marker.damage);
         points.award(marker.owner, sim::POINTS_PER_HIT);
         info!(
             "Hit: {:?} shot {target:?} (health now {}/{})",

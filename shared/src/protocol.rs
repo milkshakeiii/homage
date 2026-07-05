@@ -78,6 +78,9 @@ impl Weapon {
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct BulletMarker {
     pub owner: PeerId,
+    /// Hit damage. Small arms are 1; a bomber torpedo is heavy enough to
+    /// punch through mothership damage reduction.
+    pub damage: u16,
 }
 
 /// Despawns `lifetime_ticks` after `origin_tick` (bullets, ore fragments).
@@ -108,6 +111,7 @@ pub enum HullKind {
     Fighter,
     Harvester,
     Corvette,
+    Bomber,
     ResourceController,
     StrikeCarrier,
 }
@@ -286,6 +290,13 @@ pub struct UnlockOrder {
     pub fitting: FittingId,
 }
 
+/// Server → client: a mothership fell; the match is over. The world resets
+/// shortly after.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct MatchResult {
+    pub winner: Team,
+}
+
 /// Server → client: authoritative wealth + unlocks snapshot. Sent after
 /// unlock orders (and on demand) because the ship components that normally
 /// mirror these die with the ship — and unlocking happens on the death
@@ -396,6 +407,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<UnlockOrder>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<WealthUpdate>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<MatchResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<CheatOrder>()
             .add_direction(NetworkDirection::ClientToServer);

@@ -67,6 +67,10 @@ struct ScoreboardRoot;
 #[derive(Component)]
 struct ScoreboardText;
 #[derive(Component)]
+struct MatchBannerRoot;
+#[derive(Component)]
+struct MatchBannerText;
+#[derive(Component)]
 struct MapMarker;
 #[derive(Component)]
 struct MapFacilityButton(Entity);
@@ -110,7 +114,13 @@ impl Plugin for SpawnScreenPlugin {
         app.init_resource::<LoadoutState>();
         app.add_systems(
             Startup,
-            (setup_map_screen, setup_loadout_screen, setup_minimap, setup_scoreboard),
+            (
+                setup_map_screen,
+                setup_loadout_screen,
+                setup_minimap,
+                setup_scoreboard,
+                setup_match_banner,
+            ),
         );
         app.add_systems(
             Update,
@@ -124,6 +134,7 @@ impl Plugin for SpawnScreenPlugin {
                 spawn_button_clicks,
                 screen_keys,
                 scoreboard,
+                match_banner,
                 update_screen_texts,
             )
                 .chain(),
@@ -386,6 +397,60 @@ fn setup_scoreboard(mut commands: Commands) {
                 panel.spawn((ScoreboardText, text("", 16.0, BRIGHT)));
             });
         });
+}
+
+/// Big center banner while a match result is fresh (the ~10s intermission).
+fn setup_match_banner(mut commands: Commands) {
+    commands
+        .spawn((
+            MatchBannerRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                top: Val::Percent(18.0),
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            Visibility::Hidden,
+            GlobalZIndex(30),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(30.0), Val::Px(14.0)),
+                    ..default()
+                },
+                BackgroundColor(PANEL_BG),
+            ))
+            .with_children(|panel| {
+                panel.spawn((MatchBannerText, text("", 34.0, AMBER)));
+            });
+        });
+}
+
+fn match_banner(
+    time: Res<Time>,
+    result: Res<crate::LastMatchResult>,
+    mut root: Query<&mut Visibility, With<MatchBannerRoot>>,
+    mut banner: Query<&mut Text, With<MatchBannerText>>,
+) {
+    let Ok(mut visibility) = root.single_mut() else {
+        return;
+    };
+    let show = result
+        .0
+        .map(|(_, at)| time.elapsed_secs() - at < sim::MATCH_RESET_TICKS as f32 * sim::TICK_DT)
+        .unwrap_or(false);
+    *visibility = if show {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    if show {
+        if let (Ok(mut text), Some((winner, _))) = (banner.single_mut(), result.0) {
+            text.0 = format!("{winner:?} TEAM WINS - new match starting...");
+        }
+    }
 }
 
 /// Rebuild the scoreboard text and toggle its visibility while Tab is held.

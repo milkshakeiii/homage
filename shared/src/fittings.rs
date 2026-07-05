@@ -84,6 +84,7 @@ pub struct WeaponProfile {
     pub spread: f32,
     /// Multiplier on BULLET_LIFETIME_TICKS.
     pub lifetime_mult: f32,
+    pub damage: u16,
 }
 
 pub fn weapon_profile(weapon: FittingId, hull: HullKind) -> Option<WeaponProfile> {
@@ -95,6 +96,7 @@ pub fn weapon_profile(weapon: FittingId, hull: HullKind) -> Option<WeaponProfile
             pellets: 3,
             spread: 0.11,
             lifetime_mult: 0.5,
+            damage: 1,
         },
         FittingId::LongLance => WeaponProfile {
             cooldown_ticks: (base.cooldown_ticks as f32 * 2.4) as u16,
@@ -102,6 +104,7 @@ pub fn weapon_profile(weapon: FittingId, hull: HullKind) -> Option<WeaponProfile
             pellets: 1,
             spread: 0.0,
             lifetime_mult: 1.2,
+            damage: 1,
         },
         // Pulse cannon and anything unexpected: the hull's stock weapon.
         _ => WeaponProfile {
@@ -110,6 +113,7 @@ pub fn weapon_profile(weapon: FittingId, hull: HullKind) -> Option<WeaponProfile
             pellets: 1,
             spread: 0.0,
             lifetime_mult: 1.0,
+            damage: base.damage,
         },
     })
 }

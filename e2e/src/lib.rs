@@ -260,6 +260,36 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<UnlockOrder> on the client entity");
     }
 
+    /// A team's mothership health server-side: (current, max).
+    pub fn server_mothership_health(&mut self, team: Team) -> Option<(u16, u16)> {
+        let world = self.server.world_mut();
+        let mut query = world.query_filtered::<(&Team, &Health), With<Mothership>>();
+        query
+            .iter(world)
+            .find(|(t, _)| **t == team)
+            .map(|(_, health)| (health.current, health.max))
+    }
+
+    /// Set a mothership's health (test shortcut for the win condition).
+    pub fn set_mothership_health(&mut self, team: Team, current: u16) {
+        let world = self.server.world_mut();
+        let mut query = world.query_filtered::<(&Team, &mut Health), With<Mothership>>();
+        for (t, mut health) in query.iter_mut(world) {
+            if *t == team {
+                health.current = current;
+            }
+        }
+    }
+
+    /// The winner a client last heard about, if any.
+    pub fn client_last_match_result(&mut self, client_idx: usize) -> Option<Team> {
+        self.clients[client_idx]
+            .world()
+            .resource::<homage_client::LastMatchResult>()
+            .0
+            .map(|(winner, _)| winner)
+    }
+
     /// Roster entries as replicated to a client: (player id, team, kills,
     /// deaths, points), sorted by player id.
     pub fn client_roster(&mut self, client_idx: usize) -> Vec<(u64, Team, u32, u32, u32)> {
