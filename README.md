@@ -36,6 +36,20 @@ mobile spawn point, forward dropoff, and rallying line whose positioning can
 win or lose the map. Victory belongs to the team that self-organizes the better
 fleet and flies it better.
 
+## Current state (checkpoint, 2026-07-04)
+
+The full game loop is playable end-to-end with placeholder (gizmo) art:
+harvest asteroids and bank ore; buy carrier-type hulls at the mothership
+(resource controller, strike carrier, fleet carrier) and an outfitter at a
+fleet carrier; spawn fitted combat ships (fighter, harvester, corvette,
+bomber) from carriers; earn points and unlock fittings across three slots
+(weapons / SHIFT utilities / hull mods) with facility-specific stocking;
+dock at friendly facilities to refit in place; torpedo the enemy mothership
+through its small-arms-proof armor; win, see the match summary, and the
+world resets for the next match. All of it is covered by 45 headless
+end-to-end tests (`cargo test --workspace`). Upcoming work is tracked in
+DESIGN.md §12.
+
 ## Development
 
 The workspace has four crates:

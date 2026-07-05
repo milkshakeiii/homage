@@ -11,12 +11,18 @@ needs Henry's input.
 - `shared` — network protocol (`protocol.rs`), shared simulation (`sim.rs`),
   physics setup (`lib.rs`). Everything here runs identically on client and
   server; determinism is required for prediction rollbacks to work.
-- `server` — headless dedicated server. Hand-rolled Valve-style lag
-  compensation (see comments in `server/src/main.rs` for why not
-  lightyear_avian's plugin).
-- `client` — windowed client, gizmo-only rendering. `cargo run -p
-  homage_client -- <id>` (unique id per client), append `bot` for a
-  self-driving client.
+- `shared/src/hulls.rs` — per-hull stat tables, hull classes (who builds
+  what where), control archetypes. `shared/src/fittings.rs` — the fitting
+  catalog: costs, facility stocking, weapon profiles, hull-mod effects.
+- `server` — headless dedicated server (`server/src/lib.rs` + thin main).
+  Hand-rolled Valve-style lag compensation (see comments there for why not
+  lightyear_avian's plugin). Authoritative state that must survive death
+  lives in resources keyed by PeerId (Banks, PointsStore, Unlocks, KdStore,
+  DockedStates), mirrored onto ship components for replication.
+- `client` — windowed client, gizmo-only rendering (`client/src/lib.rs`,
+  spawn/loadout/map/scoreboard UI in `client/src/spawn_screen.rs`, feel
+  effects in `client/src/juice.rs`). `cargo run -p homage_client -- <id>`
+  (unique id per client), append `bot` for a self-driving client.
 - `e2e` — the headless integration-test harness (`TestNet`): one real server
   App plus N real client Apps in one process over loopback UDP, time-stepped
   manually (one tick per `update()`), so a connect→shoot→kill→respawn cycle
@@ -71,10 +77,30 @@ adding a crate to be slow.
   (manual time stepping runs exactly one tick per update); message-flow
   features must also be verified against real binaries (HOMAGE_AUTO_SCUTTLE
   exists for this).
+- Ship-mirrored components (Bank, Points, UnlockedFittings) die with the
+  ship, and the death/dock screens are exactly where the player acts on that
+  state. Anything those screens need must ALSO reach the client as a
+  server→client message consumed into a resource in Update (WealthUpdate →
+  WealthCache, DockedNotice → DockedAt, MatchResult → LastMatchResult) —
+  in BOTH windowed and headless modes, so e2e tests can assert on the
+  resource (raw MessageReceiver buffers are cleared every frame and cannot
+  be drained from test code after `tick()`).
+- Per-player stats that must outlive ships AND be visible to everyone
+  (scoreboard) live on replicated roster entities (RosterEntry — deliberately
+  not PlayerId, so ship systems never match them).
+- Player-visible UI strings must be ASCII: bevy's default font has no glyphs
+  for em-dashes/middle dots/ellipses (they render as boxes).
 - Island sleeping is disabled in avian (incompatible with rollbacks); the
   IslandPlugin itself must stay (see `shared/src/lib.rs`).
 - `app.set_error_handler(bevy::ecs::error::warn)` on the server: ECS command
   failures must not kill a dedicated server.
+
+## Where things stand
+
+DESIGN.md §10 tracks milestone status (M0–M3.5 done; M4 mostly done) and
+§12 is the living upcoming-work list — read it before picking new work.
+Dev cheats (F1–F7) are always-on for development and MUST be gated or
+stripped before any public build.
 
 ## Process (agreed with Henry)
 

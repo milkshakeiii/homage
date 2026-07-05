@@ -178,7 +178,8 @@ fitting is yours for the rest of the match; nothing is re-bought per life.
 **Slots (APPROVED):** each hull has a weapon slot, a utility slot, and a hull
 mod slot. First playable ships just the weapon slot with 2–3 options per hull.
 
-**Facility stocking (PROPOSED):** *unlocking* a fitting costs points and can
+**Facility stocking (PROPOSED — implemented and playable):** *unlocking* a
+fitting costs points and can
 be done from anywhere (it's account state), but *equipping* it happens inside
 the refit radius of a friendly facility **that stocks it** — and facilities
 stock different things (see catalog). Spawning auto-equips your saved loadout
@@ -188,26 +189,32 @@ time for an optimized ship" loop: the fully-kitted ship requires a hull from
 one facility and modules from another, and a team whose infrastructure is
 well-placed turns that trip from a chore into a pit stop.
 
-**Placeholder catalog (PROPOSED — names and effects are all placeholders):**
+**Placeholder catalog (PROPOSED — names and effects are all placeholders).**
+Built = in the game today (`shared/src/fittings.rs` is the implementation
+ground truth); open = upcoming work.
 
-| Slot | Fitting | Effect | Stocked at | Tier |
-|---|---|---|---|---|
-| Weapon | Pulse cannon | fighter default | everywhere | 1 |
-| Weapon | Scatter gun | close-range spread | any carrier | 1 |
-| Weapon | Long-lance railgun | slow RoF, very fast projectile | **strike carrier only** | 2 |
-| Weapon | Flak burst | proximity-detonating anti-fighter (corvette) | any carrier | 1 |
-| Weapon | Torpedo | bomber default: slow, huge, dumb-fire | any carrier | 1 |
-| Weapon | Mag-torpedo | mild tracking, less damage | **strike carrier only** | 2 |
-| Utility | Afterburner | heat-limited boost | everywhere | 1 |
-| Utility | Blink thruster | impulse dash on cooldown | **outfitter only** | 2 |
-| Utility | Shield capacitor | timed damage absorb (active block) | **outfitter only** | 2 |
-| Utility | Tractor scoop | wider ore pickup, pulls fragments | resource controller | 1 |
-| Utility | Repair drone | slow out-of-combat regen | **outfitter only** | 2 |
-| Hull mod | Gyro tuning | +turn rate | everywhere | 1 |
-| Hull mod | Armor plate | +HP, +mass | everywhere | 1 |
-| Hull mod | Lightweight frame | −HP, +acceleration | **strike carrier only** | 2 |
-| Hull mod | Compacted hold | +cargo capacity, worse handling | resource controller | 2 |
-| Hull mod | Mag-clamp hold | keep half your cargo on death | resource controller | 2 |
+| Slot | Fitting | Effect | Stocked at | Tier | Built |
+|---|---|---|---|---|---|
+| Weapon | Pulse cannon | fighter default | everywhere | 1 | yes |
+| Weapon | Scatter gun | close-range 3-pellet spread | any carrier | 1 | yes |
+| Weapon | Long-lance railgun | slow RoF, very fast projectile | **strike carrier only** | 2 | yes |
+| Weapon | Flak burst | proximity-detonating anti-fighter (corvette) | any carrier | 1 | open |
+| Weapon | Torpedo | bomber default: slow, huge, dumb-fire | any carrier | 1 | yes |
+| Weapon | Mag-torpedo | mild tracking, less damage | **strike carrier only** | 2 | open |
+| Utility | Afterburner | boost (heat limit still open) | everywhere | 1 | yes |
+| Utility | Blink thruster | impulse dash on cooldown | **outfitter only** | 2 | yes |
+| Utility | Shield capacitor | timed damage absorb (active block) | **outfitter only** | 2 | open |
+| Utility | Tractor scoop | wider ore pickup, pulls fragments | resource controller | 1 | open |
+| Utility | Repair drone | slow out-of-combat regen | **outfitter only** | 2 | open |
+| Hull mod | Gyro tuning | +turn rate | everywhere | 1 | yes |
+| Hull mod | Armor plate | +HP, +mass | everywhere | 1 | yes |
+| Hull mod | Lightweight frame | −HP, +acceleration | **strike carrier only** | 2 | yes |
+| Hull mod | Compacted hold | +cargo capacity, worse handling | resource controller* | 2 | yes |
+| Hull mod | Mag-clamp hold | keep half your cargo on death | resource controller | 2 | open |
+
+\* Stocking deviation while RC docking doesn't exist: compacted hold (and
+scatter gun) are stocked at any carrier. Restore RC stocking when the
+resource controller becomes dockable.
 
 ## 6. Hull roster & construction tree
 
@@ -232,18 +239,18 @@ and the outfitter line, where the best **modules** come from. A team with only
 strike carriers hits hard with unoptimized ships; a team with only fleet
 carriers flies tricked-out corvettes but can't field a megalaser frigate.
 
-| Hull | Class | Archetype | Role | Built/bought at | First playable? |
+| Hull | Class | Archetype | Role | Built/bought at | Status |
 |---|---|---|---|---|---|
-| Starter fighter | small | Pilot | scout, harass, free default | free (mothership + carriers) | yes |
-| Harvester | small | Pilot | ore hauling; big cargo, weak gun | any spawn point | yes |
-| Corvette | small | Gunship | anti-fighter turret platform | carrier | yes |
-| Bomber | small | Pilot | anti-capital torpedoes, helpless vs fighters | carrier | yes |
-| Missile boat | medium | Gunship | area anti-fighter, slow | carrier | later |
-| Megalaser frigate | large | Gunship | capital-killer, slow-traverse turret | **strike carrier** | later |
-| Resource controller | carrier-type | Captain | mobile dropoff, lightly armed | mothership | yes |
-| Strike carrier | carrier-type | Captain | forward spawn; heavy-hull + weapon source | mothership | yes |
-| Fleet carrier | carrier-type | Captain | spawn + dropoff; builds sub-carriers | mothership | later |
-| Outfitter | sub-carrier | Captain | forward refit; tier-2 module source | **fleet carrier** | later |
+| Starter fighter | small | Pilot | scout, harass, free default | free (mothership + carriers) | built |
+| Harvester | small | Pilot | ore hauling; big cargo, weak gun | any spawn point | built |
+| Corvette | small | Gunship | anti-fighter turret platform | carrier | built |
+| Bomber | small | Pilot | anti-capital torpedoes, helpless vs fighters | carrier | built |
+| Missile boat | medium | Gunship | area anti-fighter, slow | carrier | upcoming |
+| Megalaser frigate | large | Gunship | capital-killer, slow-traverse turret | **strike carrier** | upcoming |
+| Resource controller | carrier-type | Captain | mobile dropoff, lightly armed | mothership | built |
+| Strike carrier | carrier-type | Captain | forward spawn; heavy-hull + weapon source | mothership | built |
+| Fleet carrier | carrier-type | Captain | spawn + dropoff; builds sub-carriers | mothership | built |
+| Outfitter | sub-carrier | Captain | forward refit; tier-2 module source | **fleet carrier** | built |
 
 **Carrier-type hulls are piloted (APPROVED):** buying a resource controller,
 carrier, or outfitter puts *you* in it — it is your ship, per the vision's
@@ -271,7 +278,8 @@ click queues). Omitted from Savage's screen: COMMAND (no commander), Request
 (nobody to request from), item stock counts (our stocking is about *where*,
 not *how many*). Presets (saved loadouts) are a later nicety.
 
-**Docking & refit (APPROVED — Henry, 2026-07-04):** the loadout screen is
+**Docking & refit (APPROVED — Henry, 2026-07-04; implemented):** the
+loadout screen is
 always "the docked UI" — death is just being force-docked with a facility
 still to choose. Flying into a friendly facility's refit radius and holding
 the dock key stows your ship and opens the same screen; leaving it undocks
@@ -342,21 +350,66 @@ holding map features.
   and points, backed by replicated per-player roster entities that survive
   death (kill/death ledger next to the points ledger; self-destructs count
   as deaths).
-- **M4 — win condition & breadth (win condition done):** motherships take
-  damage above flat DR (small arms literally bounce — capital weapons are
-  required, §2); the bomber and its 25-damage dumb-fire torpedo are the
-  first capital killer; a mothership kill announces the winner to everyone
-  and resets the world after a 10 s intermission (ledgers cleared, field
-  regenerated, everyone redeploys through the spawn screen). Fleet carrier,
-  outfitter (built only AT a fleet carrier — ships-build-ships one level
-  deeper), and the docking/refit model are done: hold E at a friendly
-  facility to dock (dropoffs auto-deposit), refit against its stock, undock
-  in place instantly and free. Blink is outfitter-exclusive as the catalog
-  intended. Remaining breadth: missile boat, megalaser frigate, map balance
-  pass, RC docking.
+- **M4 — win condition & breadth (mostly done):** motherships take damage
+  above flat DR (small arms literally bounce — capital weapons are required,
+  §2); the bomber and its 25-damage dumb-fire torpedo are the first capital
+  killer; a mothership kill announces the winner to everyone (end-of-match
+  summary: winner, MVP, standings, countdown) and resets the world after a
+  10 s intermission (ledgers cleared, field regenerated, everyone redeploys
+  through the spawn screen). Fleet carrier, outfitter (built only AT a fleet
+  carrier — ships-build-ships one level deeper), and the docking/refit model
+  are done: hold E at a friendly facility to dock (dropoffs auto-deposit),
+  refit against its stock, undock in place instantly and free. Blink is
+  outfitter-exclusive as the catalog intended. Remaining breadth lives in
+  §12.
 
 Every milestone re-checks the §4.2 guideposts; feel regressions are release
 blockers, not polish debt.
+
+## 12. Upcoming work (checkpoint, 2026-07-04)
+
+Everything playable today: the full loop — harvest → bank → build carriers →
+field fitted ships → siege the mothership → win → summary → reset — is
+implemented and covered by 45 e2e tests. What remains, roughly in the order
+Claude would take it (autonomous-testable items first):
+
+**M4 remainder (mechanics, e2e-testable):**
+- **Missile boat** (Gunship, medium): area anti-fighter — needs the flak
+  burst weapon (proximity detonation, the first area-damage mechanic).
+- **Megalaser frigate** (Gunship, large, strike-carrier-exclusive):
+  capital-killer with a slow-traverse turret — needs turret traverse limits
+  (currently turrets snap to the mouse instantly).
+- **RC docking**: make the resource controller dockable, then restore the
+  catalog's RC stocking (tractor scoop, compacted hold, mag-clamp).
+- **Catalog completion**: flak burst, mag-torpedo, shield capacitor, tractor
+  scoop, repair drone, mag-clamp hold; afterburner heat limit (guidepost 4:
+  commit, not hold).
+
+**Needs Henry (feel/judgment, not autonomous):**
+- **Map balance pass** (§8): belt density/placement, mothership distance,
+  soft-boundary tuning — feel work.
+- **Tech tree depth** (§9, OPEN): still "not yet interesting enough";
+  the pieces are now all on the board (archetypes, stocking geography,
+  sub-carriers) — needs a design conversation.
+- **Playtest debts**: harvester handling-under-load re-check (M1 note),
+  hold-E dock feel, torpedo/mothership-siege pacing (1000 HP vs 23
+  damage/torpedo ≈ 44 torpedoes — is a solo siege too slow, a 4-bomber
+  wing too fast?).
+
+**Quality-of-life (parked niceties):**
+- Player display names (roster entities are ready for a name field at
+  connect; scoreboard shows P<id> today).
+- Loadout presets (saved loadouts, one-click respawn kit).
+- Savage-style hull schematic drawing on the loadout screen.
+- Kill feed; deaths currently announce only via kill rings.
+- Mothership siege feedback: team-wide "mothership under attack" warning.
+- Spawn-screen polish: facility health/status on the map, queue-while-dead
+  refinements.
+
+**Before any public build (hard requirements):**
+- Gate or strip dev cheats (F1–F7 are always-on today).
+- Team-size caps and mid-match join/leave hardening beyond the current
+  smaller-team assignment.
 
 ## 11. Explicitly out of scope (for now)
 
