@@ -57,6 +57,15 @@ impl Default for LoadoutState {
 struct MapRoot;
 #[derive(Component)]
 struct MapArea;
+/// A panel that receives battlefield markers; the f32 scales marker sizes.
+#[derive(Component)]
+struct MarkerHost(f32);
+#[derive(Component)]
+struct MinimapRoot;
+#[derive(Component)]
+struct ScoreboardRoot;
+#[derive(Component)]
+struct ScoreboardText;
 #[derive(Component)]
 struct MapMarker;
 #[derive(Component)]
@@ -99,7 +108,10 @@ impl Plugin for SpawnScreenPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DeadUi>();
         app.init_resource::<LoadoutState>();
-        app.add_systems(Startup, (setup_map_screen, setup_loadout_screen));
+        app.add_systems(
+            Startup,
+            (setup_map_screen, setup_loadout_screen, setup_minimap, setup_scoreboard),
+        );
         app.add_systems(
             Update,
             (
@@ -111,6 +123,7 @@ impl Plugin for SpawnScreenPlugin {
                 module_tile_clicks,
                 spawn_button_clicks,
                 screen_keys,
+                scoreboard,
                 update_screen_texts,
             )
                 .chain(),
@@ -175,6 +188,7 @@ fn setup_map_screen(mut commands: Commands) {
             // The map: world (±MAP_HALF_*) mapped onto this panel by percent.
             root.spawn((
                 MapArea,
+                MarkerHost(1.0),
                 Node {
                     width: Val::Percent(80.0),
                     // Keep the world's 3:2 aspect.
@@ -227,7 +241,7 @@ fn refresh_map_markers(
     mut last_refresh: Local<f32>,
     ui: Res<DeadUi>,
     mut commands: Commands,
-    area: Query<Entity, With<MapArea>>,
+    area: Query<(Entity, &MarkerHost)>,
     old: Query<Entity, With<MapMarker>>,
     own_team_source: Query<&Team, (With<PlayerId>, With<Predicted>)>,
     mut own_team: Local<Option<Team>>,
@@ -238,61 +252,60 @@ fn refresh_map_markers(
     if let Ok(team) = own_team_source.single() {
         *own_team = Some(*team);
     }
-    if *ui != DeadUi::Map {
-        return;
-    }
     let now = time.elapsed_secs();
     if now - *last_refresh < 0.4 {
         return;
     }
     *last_refresh = now;
-    let Ok(area) = area.single() else {
-        return;
-    };
+    let _ = *ui;
     for entity in &old {
         commands.entity(entity).despawn();
     }
     let mine = *own_team;
 
-    for position in &asteroids {
-        let marker = (
-            MapMarker,
-            marker_node(position.0, 4.0, Color::srgba(0.5, 0.48, 0.42, 0.8)),
-        );
-        commands.spawn(marker).insert(ChildOf(area));
-    }
-    for (entity, position, team, kind, color) in &ships {
-        let friendly = mine == Some(*team);
-        let clickable = friendly && *kind == HullKind::StrikeCarrier;
-        let size = if clickable { 16.0 } else { 7.0 };
-        let marker_color = if friendly || mine.is_none() {
-            color.0
-        } else {
-            color.0.with_alpha(0.5)
-        };
-        let mut e = commands.spawn((MapMarker, marker_node(position.0, size, marker_color)));
-        e.insert(ChildOf(area));
-        if clickable {
-            e.insert((Button, MapFacilityButton(entity)));
+    for (host, scale) in area.iter().map(|(e, h)| (e, h.0)) {
+        for position in &asteroids {
+            let marker = (
+                MapMarker,
+                marker_node(position.0, 4.0 * scale, Color::srgba(0.5, 0.48, 0.42, 0.8)),
+            );
+            commands.spawn(marker).insert(ChildOf(host));
         }
-    }
-    for (entity, position, team) in &motherships {
-        let friendly = mine == Some(*team);
-        let color = match team {
-            Team::Blue => Color::srgb(0.35, 0.55, 1.0),
-            Team::Red => Color::srgb(1.0, 0.35, 0.35),
-        };
-        let color = if friendly { color } else { color.with_alpha(0.5) };
-        let mut e = commands.spawn((MapMarker, marker_node(position.0, 22.0, color)));
-        e.insert(ChildOf(area));
-        if friendly {
-            e.insert((Button, MapFacilityButton(entity)));
+        for (entity, position, team, kind, color) in &ships {
+            let friendly = mine == Some(*team);
+            let clickable = friendly && *kind == HullKind::StrikeCarrier;
+            let size = if clickable { 16.0 } else { 7.0 } * scale;
+            let marker_color = if friendly || mine.is_none() {
+                color.0
+            } else {
+                color.0.with_alpha(0.5)
+            };
+            let mut e =
+                commands.spawn((MapMarker, marker_node(position.0, size, marker_color)));
+            e.insert(ChildOf(host));
+            if clickable {
+                e.insert((Button, MapFacilityButton(entity)));
+            }
+        }
+        for (entity, position, team) in &motherships {
+            let friendly = mine == Some(*team);
+            let color = match team {
+                Team::Blue => Color::srgb(0.35, 0.55, 1.0),
+                Team::Red => Color::srgb(1.0, 0.35, 0.35),
+            };
+            let color = if friendly { color } else { color.with_alpha(0.5) };
+            let mut e = commands.spawn((MapMarker, marker_node(position.0, 22.0 * scale, color)));
+            e.insert(ChildOf(host));
+            if friendly {
+                e.insert((Button, MapFacilityButton(entity)));
+            }
         }
     }
 }
 
 fn map_facility_clicks(
     mut ui: ResMut<DeadUi>,
+
     mut state: ResMut<LoadoutState>,
     wealth: Res<WealthCache>,
     facility_lookup: Query<(Option<&Mothership>, Option<&HullKind>)>,
@@ -300,7 +313,7 @@ fn map_facility_clicks(
     mut sender: Query<&mut MessageSender<SpawnOrder>, With<Client>>,
 ) {
     for (interaction, facility) in &buttons {
-        if *interaction != Interaction::Pressed {
+        if *interaction != Interaction::Pressed || *ui != DeadUi::Map {
             continue;
         }
         state.facility = Some(facility.0);
@@ -323,6 +336,97 @@ fn map_facility_clicks(
         }
         *ui = DeadUi::Loadout;
     }
+}
+
+/// Corner minimap, visible while flying (M3.5).
+fn setup_minimap(mut commands: Commands) {
+    commands.spawn((
+        MinimapRoot,
+        MarkerHost(0.45),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(10.0),
+            bottom: Val::Px(10.0),
+            width: Val::Px(240.0),
+            aspect_ratio: Some(sim::MAP_HALF_WIDTH / sim::MAP_HALF_HEIGHT),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.04, 0.07, 0.11, 0.72)),
+        Visibility::Hidden,
+        GlobalZIndex(5),
+    ));
+}
+
+/// Hold-Tab scoreboard (M3.5): both rosters with K/D and points.
+fn setup_scoreboard(mut commands: Commands) {
+    commands
+        .spawn((
+            ScoreboardRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            Visibility::Hidden,
+            GlobalZIndex(20),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    padding: UiRect::all(Val::Px(18.0)),
+                    min_width: Val::Px(520.0),
+                    ..default()
+                },
+                BackgroundColor(PANEL_BG),
+            ))
+            .with_children(|panel| {
+                panel.spawn((ScoreboardText, text("", 16.0, BRIGHT)));
+            });
+        });
+}
+
+/// Rebuild the scoreboard text and toggle its visibility while Tab is held.
+fn scoreboard(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut root: Query<&mut Visibility, With<ScoreboardRoot>>,
+    mut board: Query<&mut Text, With<ScoreboardText>>,
+    roster: Query<(&RosterEntry, &Team, &Kills, &Deaths, &Points)>,
+) {
+    let Ok(mut visibility) = root.single_mut() else {
+        return;
+    };
+    if !keys.pressed(KeyCode::Tab) {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Visible;
+    let Ok(mut text) = board.single_mut() else {
+        return;
+    };
+    let mut lines = String::new();
+    for team in [Team::Blue, Team::Red] {
+        lines.push_str(&format!("=== {team:?} ===
+"));
+        lines.push_str(&format!("{:<12} {:>5} {:>5} {:>7}
+", "player", "K", "D", "pts"));
+        let mut entries: Vec<_> = roster
+            .iter()
+            .filter(|(_, t, ..)| **t == team)
+            .map(|(entry, _, kills, deaths, points)| {
+                (entry.0.to_bits(), kills.0, deaths.0, points.0)
+            })
+            .collect();
+        entries.sort_by_key(|(_, _, _, points)| std::cmp::Reverse(*points));
+        for (id, kills, deaths, points) in entries {
+            lines.push_str(&format!("P{id:<11} {kills:>5} {deaths:>5} {points:>7}
+"));
+        }
+        lines.push('\n');
+    }
+    text.0 = lines;
 }
 
 // ------------------------------------------------------------ loadout screen
@@ -519,14 +623,26 @@ fn cache_wealth(
 
 /// Death opens the map (map-first: the facility is the shop); respawn hides
 /// everything and resets the per-death state.
+#[allow(clippy::type_complexity)]
 fn dead_ui_lifecycle(
     alive: Query<(), (With<Predicted>, With<InputMarker<Inputs>>)>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut ui: ResMut<DeadUi>,
     mut state: ResMut<LoadoutState>,
     mut died_at: Local<Option<f32>>,
     time: Res<Time>,
-    mut map_root: Query<&mut Visibility, (With<MapRoot>, Without<LoadoutRoot>)>,
-    mut loadout_root: Query<&mut Visibility, (With<LoadoutRoot>, Without<MapRoot>)>,
+    mut map_root: Query<
+        &mut Visibility,
+        (With<MapRoot>, Without<LoadoutRoot>, Without<MinimapRoot>),
+    >,
+    mut loadout_root: Query<
+        &mut Visibility,
+        (With<LoadoutRoot>, Without<MapRoot>, Without<MinimapRoot>),
+    >,
+    mut minimap_root: Query<
+        &mut Visibility,
+        (With<MinimapRoot>, Without<MapRoot>, Without<LoadoutRoot>),
+    >,
 ) {
     let alive = !alive.is_empty();
     if alive {
@@ -538,8 +654,10 @@ fn dead_ui_lifecycle(
         state.facility = None;
         died_at.get_or_insert(time.elapsed_secs());
     }
+    // Hold M while flying for the full battlefield map (view-only).
+    let alive_map = alive && keys.pressed(KeyCode::KeyM);
     if let Ok(mut visibility) = map_root.single_mut() {
-        *visibility = if *ui == DeadUi::Map {
+        *visibility = if *ui == DeadUi::Map || alive_map {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -547,6 +665,13 @@ fn dead_ui_lifecycle(
     }
     if let Ok(mut visibility) = loadout_root.single_mut() {
         *visibility = if *ui == DeadUi::Loadout {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut visibility) = minimap_root.single_mut() {
+        *visibility = if alive && !alive_map {
             Visibility::Visible
         } else {
             Visibility::Hidden
@@ -812,7 +937,9 @@ fn update_screen_texts(
     let ready = ready_in <= 0.05;
 
     if let Ok(mut t) = texts.p0().single_mut() {
-        t.0 = if ready {
+        t.0 = if !alive.is_empty() {
+            "BATTLEFIELD".to_string()
+        } else if ready {
             "SELECT SPAWN POINT - ready to deploy".to_string()
         } else {
             format!("SELECT SPAWN POINT - deployable in {ready_in:.1}s")

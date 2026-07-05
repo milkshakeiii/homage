@@ -96,6 +96,67 @@ impl PointsStore {
     }
 }
 
+/// Kill/death tallies per player (scoreboard data; survives death).
+#[derive(Resource, Default)]
+pub struct KdStore(pub std::collections::HashMap<PeerId, (u32, u32)>);
+
+impl KdStore {
+    fn kill(&mut self, player: PeerId) {
+        self.0.entry(player).or_default().0 += 1;
+    }
+    fn death(&mut self, player: PeerId) {
+        self.0.entry(player).or_default().1 += 1;
+    }
+}
+
+/// One replicated roster entity per known player: team, K/D, points. The
+/// scoreboard reads these — ships die, the roster doesn't.
+fn sync_roster(
+    mut commands: Commands,
+    mut index: Local<std::collections::HashMap<PeerId, Entity>>,
+    teams: Res<TeamAssignments>,
+    kd: Res<KdStore>,
+    points: Res<PointsStore>,
+    mut entries: Query<(&mut Team, &mut Kills, &mut Deaths, &mut Points), With<RosterEntry>>,
+) {
+    for (player, team) in teams.0.iter() {
+        let (kills, deaths) = kd.0.get(player).copied().unwrap_or((0, 0));
+        let score = points.0.get(player).copied().unwrap_or(0);
+        match index.get(player).copied() {
+            Some(entity) => {
+                if let Ok((mut t, mut k, mut d, mut p)) = entries.get_mut(entity) {
+                    if *t != *team {
+                        *t = *team;
+                    }
+                    if k.0 != kills {
+                        k.0 = kills;
+                    }
+                    if d.0 != deaths {
+                        d.0 = deaths;
+                    }
+                    if p.0 != score {
+                        p.0 = score;
+                    }
+                }
+            }
+            None => {
+                let entity = commands
+                    .spawn((
+                        RosterEntry(*player),
+                        *team,
+                        Kills(kills),
+                        Deaths(deaths),
+                        Points(score),
+                        Name::from("RosterEntry"),
+                        Replicate::to_clients(NetworkTarget::All),
+                    ))
+                    .id();
+                index.insert(*player, entity);
+            }
+        }
+    }
+}
+
 /// Match-permanent fitting unlocks per player (DESIGN §5: points are spent
 /// on the unlock; nothing is re-bought per life).
 #[derive(Resource, Default)]
@@ -272,6 +333,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
     app.init_resource::<SpawnChoices>();
     app.init_resource::<PointsStore>();
     app.init_resource::<Unlocks>();
+    app.init_resource::<KdStore>();
     app.init_resource::<AsteroidFieldConfig>();
     app.add_systems(Startup, (start_server, spawn_motherships, spawn_asteroid_field));
     // Message drains MUST run in Update: lightyear clears MessageReceiver
@@ -298,6 +360,7 @@ pub fn build_server_app(addr: SocketAddr) -> App {
             deposit_cargo,
             sync_points,
             sync_unlocks,
+            sync_roster,
             respawn_ships,
             log_ships,
         )
@@ -736,6 +799,7 @@ fn receive_self_destructs(
     timeline: Res<LocalTimeline>,
     mut receivers: Query<(&RemoteId, &mut MessageReceiver<SelfDestruct>), With<ClientOf>>,
     ships: Query<(Entity, &PlayerId, &Position, Option<&CargoHold>, &ControlledBy)>,
+    mut kd: ResMut<KdStore>,
 ) {
     let tick = timeline.tick();
     for (client_id, mut receiver) in &mut receivers {
@@ -747,6 +811,7 @@ fn receive_self_destructs(
                 continue;
             };
             info!("{:?} self-destructed", client_id.0);
+            kd.death(client_id.0);
             scatter_cargo(
                 &mut commands,
                 position.0,
@@ -836,6 +901,7 @@ fn hit_detection(
     )>,
     delays: Query<&InterpolationDelay, With<ClientOf>>,
     mut points: ResMut<PointsStore>,
+    mut kd: ResMut<KdStore>,
 ) {
     let tick = timeline.tick();
     for (bullet_entity, position, velocity, marker) in &bullets {
@@ -891,6 +957,8 @@ fn hit_detection(
             info!("Kill: {:?} destroyed {:?}", marker.owner, target_id);
             let victim_hull = kind.copied().unwrap_or(HullKind::Fighter);
             points.award(marker.owner, hulls::kill_bounty(victim_hull));
+            kd.kill(marker.owner);
+            kd.death(target_id);
             // Undeposited ore scatters as scoopable fragments — recoverable
             // by the victim's team, or stolen by the killer's (DESIGN §3).
             scatter_cargo(

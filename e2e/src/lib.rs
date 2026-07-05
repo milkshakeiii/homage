@@ -260,6 +260,21 @@ impl TestNet {
         assert!(sent > 0, "no MessageSender<UnlockOrder> on the client entity");
     }
 
+    /// Roster entries as replicated to a client: (player id, team, kills,
+    /// deaths, points), sorted by player id.
+    pub fn client_roster(&mut self, client_idx: usize) -> Vec<(u64, Team, u32, u32, u32)> {
+        let world = self.clients[client_idx].world_mut();
+        let mut query = world.query::<(&RosterEntry, &Team, &Kills, &Deaths, &Points)>();
+        let mut entries: Vec<_> = query
+            .iter(world)
+            .map(|(entry, team, kills, deaths, points)| {
+                (entry.0.to_bits(), *team, kills.0, deaths.0, points.0)
+            })
+            .collect();
+        entries.sort_by_key(|(id, ..)| *id);
+        entries
+    }
+
     /// The client's last-known wealth cache (fed by ship components while
     /// alive and WealthUpdate messages while dead).
     pub fn client_wealth(&mut self, client_idx: usize) -> (u32, u32, Vec<FittingId>) {

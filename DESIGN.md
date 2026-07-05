@@ -336,12 +336,12 @@ holding map features.
   armor plate / lightweight frame / compacted hold (hull mods). Stocking
   deviations until the outfitter + docking exist: outfitter-stocked items
   live at the strike carrier, resource-controller items at any carrier.
-- **M3.5 — awareness UI (Henry, 2026-07-03):** corner minimap; hold **M**
-  for a full-screen map (the natural home for the click-to-pick spawn point
-  deferred from M2); hold **Tab** for the traditional scoreboard — both team
-  rosters with K/D and points (needs per-player kill/death counters next to
-  the points ledger). Spawn-facility cycling moves off Tab (to Q/E) when the
-  scoreboard lands.
+- **M3.5 — awareness UI (done):** corner minimap while flying; hold **M**
+  for the full battlefield map (same map the spawn screen uses, view-only
+  while alive); hold **Tab** for the scoreboard — both team rosters with K/D
+  and points, backed by replicated per-player roster entities that survive
+  death (kill/death ledger next to the points ledger; self-destructs count
+  as deaths).
 - **M4 — win condition & breadth:** mothership HP/kill flow, match reset,
   fleet carrier + outfitter + remaining roster, map balance pass.
 

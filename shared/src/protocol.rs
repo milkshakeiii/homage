@@ -212,6 +212,19 @@ pub struct Bank(pub u32);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Points(pub u32);
 
+/// A persistent per-player scoreboard entry (replicated to everyone).
+/// Deliberately NOT PlayerId: ship systems query With<PlayerId> and roster
+/// entities must never look like ships. Lives on its own entity so stats
+/// stay visible while the player is dead.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct RosterEntry(pub PeerId);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct Kills(pub u32);
+
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct Deaths(pub u32);
+
 /// Every fitting in the game. Catalog data lives in `crate::fittings`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FittingId {
@@ -403,6 +416,9 @@ impl Plugin for ProtocolPlugin {
         app.component::<Bank>().replicate();
         app.component::<Points>().replicate();
         app.component::<Equipped>().replicate();
+        app.component::<RosterEntry>().replicate();
+        app.component::<Kills>().replicate();
+        app.component::<Deaths>().replicate();
         app.component::<UnlockedFittings>().replicate();
 
         app.component::<Weapon>().replicate().predict();
