@@ -71,6 +71,8 @@ struct MatchBannerRoot;
 #[derive(Component)]
 struct MatchBannerText;
 #[derive(Component)]
+struct MatchSummaryText;
+#[derive(Component)]
 struct MapMarker;
 #[derive(Component)]
 struct MapFacilityButton(Entity);
@@ -399,7 +401,34 @@ fn setup_scoreboard(mut commands: Commands) {
         });
 }
 
-/// Big center banner while a match result is fresh (the ~10s intermission).
+fn roster_table(
+    roster: &Query<(&RosterEntry, &Team, &Kills, &Deaths, &Points)>,
+) -> String {
+    let mut lines = String::new();
+    for team in [Team::Blue, Team::Red] {
+        lines.push_str(&format!("=== {team:?} ===\n"));
+        lines.push_str(&format!(
+            "{:<12} {:>5} {:>5} {:>7}\n",
+            "player", "K", "D", "pts"
+        ));
+        let mut entries: Vec<_> = roster
+            .iter()
+            .filter(|(_, t, ..)| **t == team)
+            .map(|(entry, _, kills, deaths, points)| {
+                (entry.0.to_bits(), kills.0, deaths.0, points.0)
+            })
+            .collect();
+        entries.sort_by_key(|(_, _, _, points)| std::cmp::Reverse(*points));
+        for (id, kills, deaths, points) in entries {
+            lines.push_str(&format!("P{id:<11} {kills:>5} {deaths:>5} {points:>7}\n"));
+        }
+        lines.push('\n');
+    }
+    lines
+}
+
+/// Big center summary while a match result is fresh (the ~10s intermission):
+/// winner, MVP, final standings, countdown to the next match.
 fn setup_match_banner(mut commands: Commands) {
     commands
         .spawn((
@@ -418,38 +447,70 @@ fn setup_match_banner(mut commands: Commands) {
             root.spawn((
                 Node {
                     padding: UiRect::axes(Val::Px(30.0), Val::Px(14.0)),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
                     ..default()
                 },
                 BackgroundColor(PANEL_BG),
             ))
             .with_children(|panel| {
                 panel.spawn((MatchBannerText, text("", 34.0, AMBER)));
+                panel.spawn((
+                    MatchSummaryText,
+                    text("", 16.0, BRIGHT),
+                    Node {
+                        margin: UiRect::top(Val::Px(10.0)),
+                        ..default()
+                    },
+                ));
             });
         });
 }
 
+#[allow(clippy::type_complexity)]
 fn match_banner(
     time: Res<Time>,
     result: Res<crate::LastMatchResult>,
     mut root: Query<&mut Visibility, With<MatchBannerRoot>>,
-    mut banner: Query<&mut Text, With<MatchBannerText>>,
+    mut banner: Query<&mut Text, (With<MatchBannerText>, Without<MatchSummaryText>)>,
+    mut summary: Query<&mut Text, (With<MatchSummaryText>, Without<MatchBannerText>)>,
+    roster: Query<(&RosterEntry, &Team, &Kills, &Deaths, &Points)>,
 ) {
     let Ok(mut visibility) = root.single_mut() else {
         return;
     };
+    let intermission = sim::MATCH_RESET_TICKS as f32 * sim::TICK_DT;
     let show = result
         .0
-        .map(|(_, at)| time.elapsed_secs() - at < sim::MATCH_RESET_TICKS as f32 * sim::TICK_DT)
+        .map(|(_, at)| time.elapsed_secs() - at < intermission)
         .unwrap_or(false);
     *visibility = if show {
         Visibility::Visible
     } else {
         Visibility::Hidden
     };
-    if show {
-        if let (Ok(mut text), Some((winner, _))) = (banner.single_mut(), result.0) {
-            text.0 = format!("{winner:?} TEAM WINS - new match starting...");
-        }
+    if !show {
+        return;
+    }
+    let Some((winner, at)) = result.0 else {
+        return;
+    };
+    if let Ok(mut text) = banner.single_mut() {
+        text.0 = format!("{winner:?} TEAM WINS");
+    }
+    if let Ok(mut text) = summary.single_mut() {
+        let mvp = roster
+            .iter()
+            .max_by_key(|(.., points)| points.0)
+            .map(|(entry, team, .., points)| {
+                format!("MVP: P{} ({team:?}, {} pts)", entry.0.to_bits(), points.0)
+            })
+            .unwrap_or_default();
+        let remaining = (intermission - (time.elapsed_secs() - at)).max(0.0);
+        text.0 = format!(
+            "{mvp}\n\n{}next match in {remaining:.0}s",
+            roster_table(&roster)
+        );
     }
 }
 
